@@ -1,6 +1,5 @@
-import json
 import datetime
-from ignite.utils import setup_logger
+from metrics import SklearnClassificationReport
 import logging
 import pickle
 import random
@@ -13,10 +12,12 @@ from ignite.engine import Engine, Events
 from ignite.handlers import EarlyStopping, ModelCheckpoint
 from ignite.handlers.param_scheduler import LRScheduler, create_lr_scheduler_with_warmup
 from ignite.metrics import Accuracy, ClassificationReport, Loss
+from ignite.utils import setup_logger
 from torch.optim.lr_scheduler import ExponentialLR, ReduceLROnPlateau
 from transformers import AutoTokenizer
 
 from clinic_datasets import CleanClinicDataset
+from metrics import SklearnClassificationReport
 from model import BertGAT, BertGCN
 from params import parse_args
 from utils import *
@@ -32,7 +33,6 @@ BERTLR = 5e-5
 GCNLR = 3e-5
 LR = 4e-5
 BATCHSIZE = 8
-# NEPOCHS = 0
 NEPOCHS = 50
 ACCUSTEPS = 8
 LOGINTERVALL = 100
@@ -82,7 +82,9 @@ model = BertGCN(
 #     )
 
 
-logging.info(f"Loading pretrained bert model from {PRETRAINDCKPT} saved on {datetime.datetime.fromtimestamp(PRETRAINDCKPT.stat().st_ctime)}")
+logging.info(
+    f"Loading pretrained bert model from {PRETRAINDCKPT} saved on {datetime.datetime.fromtimestamp(PRETRAINDCKPT.stat().st_ctime)}"
+)
 ckpt = torch.load(PRETRAINDCKPT, map_location=device)
 model.bert_model.load_state_dict(ckpt["bert_model"])
 model.classifier.load_state_dict(ckpt["classifier"])
@@ -153,15 +155,15 @@ graph.ndata["cls_feats"] = torch.zeros((nb_node, model.feat_dim))
 logging.info("graph information:")
 logging.info(str(graph))
 
-train_idx = Data.TensorDataset(torch.arange(0, nb_train, dtype=torch.long))
-val_idx = Data.TensorDataset(torch.arange(nb_train + nb_word, nb_train + nb_word + nb_val, dtype=torch.long))
-test_idx = Data.TensorDataset(torch.arange(nb_node - nb_test, nb_node, dtype=torch.long))
-doc_idx = Data.ConcatDataset([train_idx, val_idx, test_idx])
+train_idx_dataset = Data.TensorDataset(torch.arange(0, nb_train, dtype=torch.long))
+val_idx_dataset = Data.TensorDataset(torch.arange(nb_train + nb_word, nb_train + nb_word + nb_val, dtype=torch.long))
+test_idx_dataset = Data.TensorDataset(torch.arange(nb_node - nb_test, nb_node, dtype=torch.long))
+doc_idx_dataset = Data.ConcatDataset([train_idx_dataset, val_idx_dataset, test_idx_dataset])
 
-idx_loader_train = Data.DataLoader(train_idx, batch_size=BATCHSIZE)
-idx_loader_val = Data.DataLoader(val_idx, batch_size=BATCHSIZE)
-idx_loader_test = Data.DataLoader(test_idx, batch_size=BATCHSIZE)
-idx_loader = Data.DataLoader(doc_idx, batch_size=BATCHSIZE, shuffle=True)
+idx_loader_train = Data.DataLoader(train_idx_dataset, batch_size=BATCHSIZE)
+idx_loader_val = Data.DataLoader(val_idx_dataset, batch_size=BATCHSIZE)
+idx_loader_test = Data.DataLoader(test_idx_dataset, batch_size=BATCHSIZE)
+idx_loader = Data.DataLoader(doc_idx_dataset, batch_size=BATCHSIZE, shuffle=True)
 
 
 def update_feature():
@@ -265,7 +267,7 @@ test_evaluator.logger = setup_logger(level=30)
 metrics = {
     "accuracy": Accuracy(),
     "nll": Loss(criterion),
-    "cr": ClassificationReport(output_dict=True, labels=dataset.LE.classes_.tolist()),
+    "cr": SklearnClassificationReport(target_names=[dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels)[val_idx])])
 }
 
 for n, f in metrics.items():
@@ -279,7 +281,8 @@ for n, f in metrics.items():
 
 
 def score_function(engine):
-    return engine.state.metrics["accuracy"]
+    return -1.0 * engine.state.metrics["nll"]
+    # return engine.state.metrics["accuracy"]
 
 
 model_checkpoint = ModelCheckpoint(
@@ -321,8 +324,6 @@ def log_validation_results(trainer):
     logging.info(
         f"Validation Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
     )
-    # logging.info("Classification report")
-    # logging.info(json.dumps(metrics["cr"]), indent=4, default=str)
 
 
 @trainer.on(Events.COMPLETED)
@@ -332,10 +333,9 @@ def log_test_results(trainer):
     logging.info(
         f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
     )
-    logging.info("Classification report")
-    logging.info(json.dumps(metrics["cr"], indent=4, default=str))
+    logging.info(metrics["cr"])
 
 
 g = update_feature()
-# trainer.run(idx_loader_train, max_epochs=NEPOCHS)
-trainer.run(idx_loader, max_epochs=NEPOCHS)
+trainer.run(idx_loader_train, max_epochs=NEPOCHS)
+# trainer.run(idx_loader, max_epochs=NEPOCHS)

@@ -10,7 +10,7 @@ import torch
 from ignite.engine import Engine, Events
 from ignite.handlers import EarlyStopping
 from ignite.handlers.param_scheduler import create_lr_scheduler_with_warmup
-from ignite.metrics import Accuracy, ClassificationReport, Loss
+from ignite.metrics import Accuracy, Loss
 from ignite.utils import convert_tensor
 from sklearn.metrics import accuracy_score
 from torch.optim.lr_scheduler import ExponentialLR, ReduceLROnPlateau
@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader, Subset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from clinic_datasets import CleanClinicDataset
+from metrics import SklearnClassificationReport
 from params import parse_args
 
 args = parse_args()
@@ -117,11 +118,18 @@ def eval_step(engine, batch):
         y_pred = model(x).logits
         return y_pred, y
 
+
 train_evaluator = Engine(eval_step)
 val_evaluator = Engine(eval_step)
 test_evaluator = Engine(eval_step)
 
-metrics = {"accuracy": Accuracy(), "nll": Loss(criterion), "cr": ClassificationReport(output_dict=True, labels=dataset.LE.classes_.tolist())}
+metrics = {
+    "accuracy": Accuracy(),
+    "nll": Loss(criterion),
+    "cr": SklearnClassificationReport(
+        target_names=[dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels)[val_idx])]
+    ),
+}
 
 for n, f in metrics.items():
     f.attach(train_evaluator, n)
@@ -134,7 +142,7 @@ for n, f in metrics.items():
 
 
 def score_function(engine):
-    return engine.state.metrics["nll"]
+    return -1. * engine.state.metrics["nll"]
     # return engine.state.metrics["accuracy"]
 
 
@@ -174,7 +182,7 @@ def log_test_results(trainer):
         f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
     )
     print("Classification report")
-    print(json.dumps(metrics["cr"], indent=4, default=str))
+    print(metrics["cr"])
 
 
 log_validation_results.best_val_acc = 0
