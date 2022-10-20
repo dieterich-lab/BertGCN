@@ -225,7 +225,7 @@ def train_step(engine, batch):
 trainer = Engine(train_step)
 trainer.logger = setup_logger(level=30)
 
-# scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
+scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
 
 # torch_lr_scheduler = ExponentialLR(optimizer=optimizer, gamma=0.5)
 # scheduler = LRScheduler(torch_lr_scheduler)
@@ -320,7 +320,7 @@ val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
 def log_validation_results(trainer):
     val_evaluator.run(idx_loader_val)
     metrics = val_evaluator.state.metrics
-    # scheduler.step(metrics["nll"])
+    scheduler.step(metrics["nll"])
     logging.info(
         f"Validation Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
     )
