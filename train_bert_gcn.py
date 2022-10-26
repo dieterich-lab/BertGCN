@@ -1,5 +1,4 @@
 import datetime
-from metrics import SklearnClassificationReport
 import logging
 import pickle
 import random
@@ -131,13 +130,21 @@ input_ids = torch.cat(
     ]
 )
 
-
-print(f"First train text examples (first 300 chars): {tokenizer.decode(input_ids[0])[:300]}")
-print(f"Label: {y[0]}, {dataset.LE.classes_[0]}")
-print(f"First val text examples (first 300 chars): {tokenizer.decode(input_ids[nb_train + nb_word])[:300]}")
-print(f"Label: {y[nb_train + nb_word]}, {dataset.LE.classes_[0]}")
-print(f"First test text examples (first 300 chars): {tokenizer.decode(input_ids[-nb_test])[:300]}")
-print(f"Label: {y[-nb_test]}, {dataset.LE.classes_[0]}")
+# logging.info(f"First train text examples (first 300 chars): {tokenizer.decode(input_ids[0])[:300]}")
+# logging.info(f"Label: {y[0]}, {dataset.LE.classes_[y[0]]}")
+# train_labels = np.unique(dataset.labels[train_idx])
+# logging.info(f"Train labels: {train_labels}, {len(train_labels)}")
+assert np.array_equal(y[:nb_train], dataset.labels[train_idx])
+# logging.info(f"First val text examples (first 300 chars): {tokenizer.decode(input_ids[nb_train + nb_word])[:300]}")
+# logging.info(f"Label: {y[nb_train + nb_word]}, {dataset.LE.classes_[y[nb_train + nb_word]]}")
+# val_labels = np.unique(dataset.labels[val_idx])
+# logging.info(f"Val labels: {val_labels}, {len(val_labels)}")
+assert np.array_equal(y[nb_train + nb_word : nb_train + nb_word + nb_val], dataset.labels[val_idx])
+# logging.info(f"First test text examples (first 300 chars): {tokenizer.decode(input_ids[-nb_test])[:300]}")
+# logging.info(f"Label: {y[-nb_test]}, {dataset.LE.classes_[y[-nb_test]]}")
+# test_labels = np.unique(dataset.labels[test_idx])
+# logging.info(f"Test labels: {test_labels}, {len(test_labels)}")
+assert np.array_equal(y[-nb_test:], dataset.labels[test_idx])
 
 # build DGL Graph
 adj_norm = normalize_adj(adj + sp.eye(adj.shape[0]))
@@ -267,7 +274,7 @@ test_evaluator.logger = setup_logger(level=30)
 metrics = {
     "accuracy": Accuracy(),
     "nll": Loss(criterion),
-    "cr": SklearnClassificationReport(target_names=[dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels)[val_idx])])
+    "cr": SklearnClassificationReport(target_names=dataset.LE.classes_)
 }
 
 for n, f in metrics.items():
