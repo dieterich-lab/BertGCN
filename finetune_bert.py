@@ -19,9 +19,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from clinic_datasets import CleanClinicDataset
 from metrics import SklearnClassificationReport
-from params import parse_args
 
-args = parse_args()
 
 MODELPATH = "deepset/gbert-base"
 LEARNINGRATE = 5e-5

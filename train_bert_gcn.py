@@ -78,6 +78,7 @@ train_idx, val_idx, test_idx = (
     idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
     idx[int(len(idx) * 0.8) :],
     )
+
 def objective(trial):
 
     adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask, _, _ = load_corpus(
@@ -122,10 +123,10 @@ def objective(trial):
 
     input_ids = torch.cat(
         [
-            torch.tensor([x["input_ids"] for x in np.array(dataset.examples)[train_idx]]),
+            torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[train_idx]])),
             torch.zeros((nb_word, tokenizer.model_max_length), dtype=torch.long),
-            torch.tensor([x["input_ids"] for x in np.array(dataset.examples)[val_idx]]),
-            torch.tensor([x["input_ids"] for x in np.array(dataset.examples)[test_idx]]),
+            torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[val_idx]])),
+            torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[test_idx]])),
         ]
     )
 
@@ -198,7 +199,8 @@ def objective(trial):
         train_loss = loss.item()
         return train_loss
 
-    def update_feature(graph, model):
+    def update_feature():
+        nonlocal graph, model
         dataloader = Data.DataLoader(Data.TensorDataset(graph.ndata["input_ids"][doc_mask]), batch_size=64)
         with torch.no_grad():
             model = model.to(device)
@@ -233,8 +235,7 @@ def objective(trial):
 
     @trainer.on(Events.EPOCH_COMPLETED)
     def reset_graph(trainer):
-        nonlocal graph, model
-        update_feature(graph, model)
+        update_feature()
         torch.cuda.empty_cache()
 
     def eval_step(engine, batch):
@@ -284,6 +285,7 @@ def objective(trial):
         global_step_transform=lambda *_: trainer.state.epoch,
         require_empty=False,
     )
+
     val_evaluator.add_event_handler(Events.COMPLETED, model_checkpoint, {"model": model})
 
     stopping_handler = EarlyStopping(patience=3, score_function=score_function, trainer=trainer)
@@ -321,21 +323,25 @@ def objective(trial):
         )
         logging.info(metrics["cr"])
 
-    update_feature(graph, model)
+    update_feature()
     trainer.run(idx_loader_train, max_epochs=NEPOCHS)
     return val_evaluator.state.metrics["accuracy"]
 
 
-study = optuna.create_study(direction="maximize")
-study.optimize(objective, n_trials=10)
+def opt():
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=10)
 
-print("Number of finished trials: ", len(study.trials))
+    print("Number of finished trials: ", len(study.trials))
 
-print("Best trial:")
-trial = study.best_trial
+    print("Best trial:")
+    trial = study.best_trial
 
-print("  Value: ", trial.value)
+    print("  Value: ", trial.value)
 
-print("  Params: ")
-for key, value in trial.params.items():
-    print("    {}: {}".format(key, value))
+    print("  Params: ")
+    for key, value in trial.params.items():
+        print("    {}: {}".format(key, value))
+
+
+opt()
