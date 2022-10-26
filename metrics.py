@@ -8,9 +8,8 @@ from sklearn.metrics import classification_report
 
 
 class SklearnClassificationReport(Metric):
-    def __init__(self, target_names=None, labels=None, output_transform=lambda x: x, device="cpu"):
+    def __init__(self, target_names=None, output_transform=lambda x: x, device="cpu"):
         self.target_names = target_names
-        self.labels = labels
         self.y_pred, self.y = list(), list()
         super(SklearnClassificationReport, self).__init__(output_transform=output_transform, device=device)
 

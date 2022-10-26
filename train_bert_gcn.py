@@ -5,6 +5,7 @@ import random
 from pathlib import Path
 
 import dgl
+import optuna
 import torch
 import torch.utils.data as Data
 from ignite.engine import Engine, Events
@@ -42,8 +43,12 @@ SAVEPATH = f"{Path(MODELPATH).stem}"
 
 tokenizer = AutoTokenizer.from_pretrained(MODELPATH)
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
 logging.basicConfig(
-    format=f"%(asctime)s ({args.mixfactor}) - %(message)s",
+    format=f"%(asctime)s - %(message)s",
+    # format=f"%(asctime)s ({args.mixfactor}) - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     level=logging.INFO,
     handlers=[
@@ -51,63 +56,18 @@ logging.basicConfig(
     ],
 )
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask, train_size, test_size = load_corpus(DATASET)
-
-nb_node = features.shape[0]
-nb_train, nb_val, nb_test = train_mask.sum(), val_mask.sum(), test_mask.sum()
-nb_word = nb_node - nb_train - nb_val - nb_test
-nb_class = y_train.shape[1]
-
-# if gcn_model == "gcn":
-model = BertGCN(
-    nb_class=nb_class,
-    pretrained_model="deepset/gbert-base",
-    mix_factor=args.mixfactor,
-    gcn_layers=2,
-    n_hidden=200,
-    dropout=0.5,
-)
-# else:
-#     model = BertGAT(
-#         nb_class=nb_class,
-#         pretrained_model="deepset/gbert-base",
-#         m=M,
-#         gcn_layers=gcn_layers,
-#         heads=heads,
-#         n_hidden=200,
-#         dropout=0.5,
-#     )
-
-
-logging.info(
-    f"Loading pretrained bert model from {PRETRAINDCKPT} saved on {datetime.datetime.fromtimestamp(PRETRAINDCKPT.stat().st_ctime)}"
-)
-ckpt = torch.load(PRETRAINDCKPT, map_location=device)
-model.bert_model.load_state_dict(ckpt["bert_model"])
-model.classifier.load_state_dict(ckpt["classifier"])
-
-
-# transform one-hot label to class ID for pytorch computation
-y = y_train + y_test + y_val
-y_train = y_train.argmax(axis=1)
-y = y.argmax(axis=1)
-
-# document mask used for update feature
-doc_mask = train_mask + val_mask + test_mask
-
-tokenizer = AutoTokenizer.from_pretrained(MODELPATH)
+optuna.logging.enable_propagation()
+optuna.logging.disable_default_handler() 
 
 dataset_file = Path("data") / "medindcls_bert.json"
 if not dataset_file.exists():
-    print("Creating dataset")
+    logging.info("Creating dataset")
     dataset = CleanClinicDataset(tokenizer=tokenizer, clean=False)
     with open(dataset_file, "wb") as f:
-        print(f"Saving dataset under {dataset_file}")
+        logging.info(f"Saving dataset under {dataset_file}")
         pickle.dump(dataset, f)
 else:
-    print(f"Loading dataset from: {dataset_file}")
+    logging.info(f"Loading dataset from: {dataset_file}")
     with open(dataset_file, "rb") as f:
         dataset = pickle.load(f)
 
@@ -117,19 +77,15 @@ train_idx, val_idx, test_idx = (
     idx[: int(len(idx) * 0.7)],
     idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
     idx[int(len(idx) * 0.8) :],
-)
+    )
 
-logging.info(f"Len idx: {len(train_idx)} {len(val_idx)} {len(test_idx)}")
+def objective(trial):
 
-input_ids = torch.cat(
-    [
-        torch.tensor([x["input_ids"] for x in np.array(dataset.examples)[train_idx]]),
-        torch.zeros((nb_word, tokenizer.model_max_length), dtype=torch.long),
-        torch.tensor([x["input_ids"] for x in np.array(dataset.examples)[val_idx]]),
-        torch.tensor([x["input_ids"] for x in np.array(dataset.examples)[test_idx]]),
-    ]
-)
+    adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask, _, _ = load_corpus(
+        DATASET
+    )
 
+<<<<<<< HEAD
 # logging.info(f"First train text examples (first 300 chars): {tokenizer.decode(input_ids[0])[:300]}")
 # logging.info(f"Label: {y[0]}, {dataset.LE.classes_[y[0]]}")
 # train_labels = np.unique(dataset.labels[train_idx])
@@ -158,107 +114,111 @@ graph.ndata["label"], graph.ndata["train"], graph.ndata["val"], graph.ndata["tes
 )
 graph.ndata["label_train"] = torch.LongTensor(y_train)
 graph.ndata["cls_feats"] = torch.zeros((nb_node, model.feat_dim))
+=======
+    nb_node = features.shape[0]
+    nb_train, nb_val, nb_test = train_mask.sum(), val_mask.sum(), test_mask.sum()
+    nb_word = nb_node - nb_train - nb_val - nb_test
+    nb_class = y_train.shape[1]
 
-logging.info("graph information:")
-logging.info(str(graph))
+    # if gcn_model == "gcn":
+    model = BertGCN(
+        nb_class=nb_class,
+        pretrained_model="deepset/gbert-base",
+        mix_factor=trial.suggest_uniform("mix_factor", 0, 1),
+        # mix_factor=args.mixfactor,
+        gcn_layers=2,
+        n_hidden=200,
+        dropout=0.5,
+    )
 
-train_idx_dataset = Data.TensorDataset(torch.arange(0, nb_train, dtype=torch.long))
-val_idx_dataset = Data.TensorDataset(torch.arange(nb_train + nb_word, nb_train + nb_word + nb_val, dtype=torch.long))
-test_idx_dataset = Data.TensorDataset(torch.arange(nb_node - nb_test, nb_node, dtype=torch.long))
-doc_idx_dataset = Data.ConcatDataset([train_idx_dataset, val_idx_dataset, test_idx_dataset])
+    logging.info(
+        f"Loading pretrained bert model from {PRETRAINDCKPT} saved on {datetime.datetime.fromtimestamp(PRETRAINDCKPT.stat().st_ctime)}"
+    )
+    ckpt = torch.load(PRETRAINDCKPT, map_location=device)
+    model.bert_model.load_state_dict(ckpt["bert_model"])
+    model.classifier.load_state_dict(ckpt["classifier"])
+>>>>>>> optuna
 
-idx_loader_train = Data.DataLoader(train_idx_dataset, batch_size=BATCHSIZE)
-idx_loader_val = Data.DataLoader(val_idx_dataset, batch_size=BATCHSIZE)
-idx_loader_test = Data.DataLoader(test_idx_dataset, batch_size=BATCHSIZE)
-idx_loader = Data.DataLoader(doc_idx_dataset, batch_size=BATCHSIZE, shuffle=True)
+    # transform one-hot label to class ID for pytorch computation
+    y = y_train + y_test + y_val
+    y_train = y_train.argmax(axis=1)
+    y = y.argmax(axis=1)
 
+    # document mask used for update feature
+    doc_mask = train_mask + val_mask + test_mask
 
-def update_feature():
-    global model, graph, doc_mask
-    dataloader = Data.DataLoader(Data.TensorDataset(graph.ndata["input_ids"][doc_mask]), batch_size=64)
-    with torch.no_grad():
-        model = model.to(device)
-        model.eval()
-        cls_list = []
-        logging.info("Udating features...")
-        for batch in dataloader:
-            input_ids = [x.to(device) for x in batch][0]
-            output = model.bert_model(input_ids=input_ids)[0][:, 0]
-            cls_list.append(output.cpu())
-        cls_feat = torch.cat(cls_list, axis=0)
-    graph = graph.to("cpu")
-    graph.ndata["cls_feats"][doc_mask] = cls_feat
-    return graph
-
-
-optimizer = torch.optim.Adam(
-    [
-        {"params": model.bert_model.parameters(), "lr": BERTLR},
-        {"params": model.classifier.parameters(), "lr": BERTLR},
-        {"params": model.gcn.parameters(), "lr": GCNLR},
-    ],
-    lr=GCNLR,
-)
-
-criterion = torch.nn.CrossEntropyLoss()
+    tokenizer = AutoTokenizer.from_pretrained(MODELPATH)
 
 
-def train_step(engine, batch):
-    global model, graph, optimizer, criterion
-    model.train()
-    model = model.to(device)
-    graph = graph.to(device)
-    (idx,) = [x.to(device) for x in batch]
-    train_mask = graph.ndata["train"][idx].type(torch.BoolTensor)
-    y_pred = model(graph, idx)[train_mask]
-    y_true = graph.ndata["label_train"][idx][train_mask]
-    loss = criterion(y_pred, y_true)
-    loss.backward()
-    if engine.state.iteration % ACCUSTEPS == 0:
-        optimizer.step()
-        optimizer.zero_grad()
-    graph.ndata["cls_feats"].detach_()
-    train_loss = loss.item()
-    # with torch.no_grad():
-    #     if train_mask.sum() > 0:
-    #         y_true = y_true.detach().cpu()
-    #         y_pred = y_pred.argmax(axis=1).detach().cpu()
-    #         train_acc = accuracy_score(y_true, y_pred)
-    #     else:
-    #         train_acc = 1
-    return train_loss  # , train_acc
+    # logging.info(f"Len idx: {len(train_idx)} {len(val_idx)} {len(test_idx)}")
 
+    input_ids = torch.cat(
+        [
+            torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[train_idx]])),
+            torch.zeros((nb_word, tokenizer.model_max_length), dtype=torch.long),
+            torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[val_idx]])),
+            torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[test_idx]])),
+        ]
+    )
 
-trainer = Engine(train_step)
-trainer.logger = setup_logger(level=30)
+    # logging.info(f"First train text examples (first 300 chars): {tokenizer.decode(input_ids[0])[:300]}")
+    # logging.info(f"Label: {y[0]}, {dataset.LE.classes_[y[0]]}")
+    # train_labels = np.unique(dataset.labels[train_idx])
+    # logging.info(f"Train labels: {train_labels}, {len(train_labels)}")
+    assert np.array_equal(y[:nb_train], dataset.labels[train_idx])
+    # logging.info(f"First val text examples (first 300 chars): {tokenizer.decode(input_ids[nb_train + nb_word])[:300]}")
+    # logging.info(f"Label: {y[nb_train + nb_word]}, {dataset.LE.classes_[y[nb_train + nb_word]]}")
+    # val_labels = np.unique(dataset.labels[val_idx])
+    # logging.info(f"Val labels: {val_labels}, {len(val_labels)}")
+    assert np.array_equal(y[nb_train + nb_word : nb_train + nb_word + nb_val], dataset.labels[val_idx])
+    # logging.info(f"First test text examples (first 300 chars): {tokenizer.decode(input_ids[-nb_test])[:300]}")
+    # logging.info(f"Label: {y[-nb_test]}, {dataset.LE.classes_[y[-nb_test]]}")
+    # test_labels = np.unique(dataset.labels[test_idx])
+    # logging.info(f"Test labels: {test_labels}, {len(test_labels)}")
+    assert np.array_equal(y[-nb_test:], dataset.labels[test_idx])
 
-scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
+    # build DGL Graph
+    adj_norm = normalize_adj(adj + sp.eye(adj.shape[0]))
 
-# torch_lr_scheduler = ExponentialLR(optimizer=optimizer, gamma=0.5)
-# scheduler = LRScheduler(torch_lr_scheduler)
-# trainer.add_event_handler(Events.EPOCH_COMPLETED, scheduler)
+    train_idx_dataset = Data.TensorDataset(torch.arange(0, nb_train, dtype=torch.long))
+    val_idx_dataset = Data.TensorDataset(
+        torch.arange(nb_train + nb_word, nb_train + nb_word + nb_val, dtype=torch.long)
+    )
+    test_idx_dataset = Data.TensorDataset(torch.arange(nb_node - nb_test, nb_node, dtype=torch.long))
 
-# scheduler = create_lr_scheduler_with_warmup(
-#     torch_lr_scheduler, warmup_start_value=0.0, warmup_end_value=LR, warmup_duration=len(idx_loader_train)
-# )
-# combined_events = Events.ITERATION_STARTED(event_filter=lambda _, __: trainer.state.iteration <= len(idx_loader_train))
-# combined_events |= Events.EPOCH_STARTED(event_filter=lambda _, __: trainer.state.epoch > 2)
-# trainer.add_event_handler(combined_events, scheduler)
+    idx_loader_train = Data.DataLoader(train_idx_dataset, batch_size=BATCHSIZE)
+    idx_loader_val = Data.DataLoader(val_idx_dataset, batch_size=BATCHSIZE)
+    idx_loader_test = Data.DataLoader(test_idx_dataset, batch_size=BATCHSIZE)
 
+    optimizer = torch.optim.Adam(
+        [
+            {"params": model.bert_model.parameters(), "lr": BERTLR},
+            {"params": model.classifier.parameters(), "lr": BERTLR},
+            {"params": model.gcn.parameters(), "lr": GCNLR},
+        ],
+        lr=GCNLR,
+    )
 
-@trainer.on(Events.EPOCH_COMPLETED)
-def reset_graph(trainer):
-    update_feature()
-    torch.cuda.empty_cache()
+    criterion = torch.nn.CrossEntropyLoss()
 
+    graph = dgl.from_scipy(adj_norm.astype("float32"), eweight_name="edge_weight")
+    graph.ndata["input_ids"] = input_ids
+    graph.ndata["label"], graph.ndata["train"], graph.ndata["val"], graph.ndata["test"] = (
+        torch.LongTensor(y),
+        torch.FloatTensor(train_mask),
+        torch.FloatTensor(val_mask),
+        torch.FloatTensor(test_mask),
+    )
+    graph.ndata["label_train"] = torch.LongTensor(y_train)
+    graph.ndata["cls_feats"] = torch.zeros((nb_node, model.feat_dim))
 
-def eval_step(engine, batch):
-    global model, graph
-    with torch.no_grad():
-        model.eval()
+    def train_step(engine, batch):
+        nonlocal model, graph, optimizer, criterion
+        model.train()
         model = model.to(device)
         graph = graph.to(device)
         (idx,) = [x.to(device) for x in batch]
+<<<<<<< HEAD
         y_pred = model(graph, idx)
         y_true = graph.ndata["label"][idx]
         return y_pred, y_true
@@ -305,44 +265,163 @@ val_evaluator.add_event_handler(Events.COMPLETED, model_checkpoint, {"model": mo
 
 stopping_handler = EarlyStopping(patience=3, score_function=score_function, trainer=trainer)
 val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
+=======
+        train_mask = graph.ndata["train"][idx].type(torch.BoolTensor)
+        y_pred = model(graph, idx)[train_mask]
+        y_true = graph.ndata["label_train"][idx][train_mask]
+        loss = criterion(y_pred, y_true)
+        loss.backward()
+        if engine.state.iteration % ACCUSTEPS == 0:
+            optimizer.step()
+            optimizer.zero_grad()
+        graph.ndata["cls_feats"].detach_()
+        train_loss = loss.item()
+        return train_loss
 
+    def update_feature():
+        nonlocal graph, model
+        dataloader = Data.DataLoader(Data.TensorDataset(graph.ndata["input_ids"][doc_mask]), batch_size=64)
+        with torch.no_grad():
+            model = model.to(device)
+            model.eval()
+            cls_list = []
+            logging.info("Udating features...")
+            for batch in dataloader:
+                input_ids = [x.to(device) for x in batch][0]
+                output = model.bert_model(input_ids=input_ids)[0][:, 0]
+                cls_list.append(output.cpu())
+            cls_feat = torch.cat(cls_list, axis=0)
+        graph = graph.to("cpu")
+        graph.ndata["cls_feats"][doc_mask] = cls_feat
 
-# @trainer.on(Events.ITERATION_COMPLETED(every=LOGINTERVALL))
-# def log_training_loss(engine):
-#     logging.info(
-#         f"Epoch[{engine.state.epoch}], Iter[{engine.state.iteration}] Loss: {engine.state.output[0]:.2f} Accuracy: {engine.state.output[1]:.2f}"
-#     )
+    trainer = Engine(train_step)
+    # trainer.model = model
+    # trainer.graph = graph
+    trainer.logger = setup_logger(level=30)
 
+    scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
 
-# @trainer.on(Events.EPOCH_COMPLETED)
-# def log_training_results(trainer):
-#     train_evaluator.run(idx_loader_train)
-#     metrics = train_evaluator.state.metrics
-#     logging.info(
-#         f"Training Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
-#     )
+    # torch_lr_scheduler = ExponentialLR(optimizer=optimizer, gamma=0.5)
+    # scheduler = LRScheduler(torch_lr_scheduler)
+    # trainer.add_event_handler(Events.EPOCH_COMPLETED, scheduler)
 
+    # scheduler = create_lr_scheduler_with_warmup(
+    #     torch_lr_scheduler, warmup_start_value=0.0, warmup_end_value=LR, warmup_duration=len(idx_loader_train)
+    # )
+    # combined_events = Events.ITERATION_STARTED(event_filter=lambda _, __: trainer.state.iteration <= len(idx_loader_train))
+    # combined_events |= Events.EPOCH_STARTED(event_filter=lambda _, __: trainer.state.epoch > 2)
+    # trainer.add_event_handler(combined_events, scheduler)
 
-@trainer.on(Events.EPOCH_COMPLETED)
-def log_validation_results(trainer):
-    val_evaluator.run(idx_loader_val)
-    metrics = val_evaluator.state.metrics
-    scheduler.step(metrics["nll"])
-    logging.info(
-        f"Validation Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
+    @trainer.on(Events.EPOCH_COMPLETED)
+    def reset_graph(trainer):
+        update_feature()
+        torch.cuda.empty_cache()
+
+    def eval_step(engine, batch):
+        nonlocal model, graph
+        with torch.no_grad():
+            model.eval()
+            model = model.to(device)
+            graph = graph.to(device)
+            (idx,) = [x.to(device) for x in batch]
+            y_pred = model(graph, idx)
+            y_true = graph.ndata["label"][idx]
+            return y_pred, y_true
+
+    train_evaluator = Engine(eval_step)
+    train_evaluator.logger = setup_logger(level=30)
+    val_evaluator = Engine(eval_step)
+    val_evaluator.logger = setup_logger(level=30)
+    pruning_handler = optuna.integration.PyTorchIgnitePruningHandler(trial, "accuracy", trainer)
+    val_evaluator.add_event_handler(Events.COMPLETED, pruning_handler)
+    test_evaluator = Engine(eval_step)
+    test_evaluator.logger = setup_logger(level=30)
+
+    metrics = {
+        "accuracy": Accuracy(),
+        "nll": Loss(criterion),
+        "cr": SklearnClassificationReport(target_names=dataset.LE.classes_)
+    }
+
+    for n, f in metrics.items():
+        f.attach(train_evaluator, n)
+
+    for n, f in metrics.items():
+        f.attach(val_evaluator, n)
+
+    for n, f in metrics.items():
+        f.attach(test_evaluator, n)
+
+    def score_function(engine):
+        return -1.0 * engine.state.metrics["nll"]
+
+    model_checkpoint = ModelCheckpoint(
+        "models/gcn",
+        n_saved=1,
+        filename_pattern=f"{SAVEPATH}_{dataset}_best.pt",
+        score_function=score_function,
+        score_name="accuracy",
+        global_step_transform=lambda *_: trainer.state.epoch,
+        require_empty=False,
     )
+>>>>>>> optuna
+
+    val_evaluator.add_event_handler(Events.COMPLETED, model_checkpoint, {"model": model})
+
+    stopping_handler = EarlyStopping(patience=3, score_function=score_function, trainer=trainer)
+    val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
+
+    # @trainer.on(Events.ITERATION_COMPLETED(every=LOGINTERVALL))
+    # def log_training_loss(engine):
+    #     logging.info(
+    #         f"Epoch[{engine.state.epoch}], Iter[{engine.state.iteration}] Loss: {engine.state.output[0]:.2f} Accuracy: {engine.state.output[1]:.2f}"
+    #     )
+
+    # @trainer.on(Events.EPOCH_COMPLETED)
+    # def log_training_results(trainer):
+    #     train_evaluator.run(idx_loader_train)
+    #     metrics = train_evaluator.state.metrics
+    #     logging.info(
+    #         f"Training Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
+    #     )
+
+    @trainer.on(Events.EPOCH_COMPLETED)
+    def log_validation_results(trainer):
+        val_evaluator.run(idx_loader_val)
+        metrics = val_evaluator.state.metrics
+        scheduler.step(metrics["nll"])
+        logging.info(
+            f"Validation Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
+        )
+
+    @trainer.on(Events.COMPLETED)
+    def log_test_results(trainer):
+        test_evaluator.run(idx_loader_test)
+        metrics = test_evaluator.state.metrics
+        logging.info(
+            f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
+        )
+        logging.info(metrics["cr"])
+
+    update_feature()
+    trainer.run(idx_loader_train, max_epochs=NEPOCHS)
+    return val_evaluator.state.metrics["accuracy"]
 
 
-@trainer.on(Events.COMPLETED)
-def log_test_results(trainer):
-    test_evaluator.run(idx_loader_test)
-    metrics = test_evaluator.state.metrics
-    logging.info(
-        f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
-    )
-    logging.info(metrics["cr"])
+def opt():
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=10)
+
+    print("Number of finished trials: ", len(study.trials))
+
+    print("Best trial:")
+    trial = study.best_trial
+
+    print("  Value: ", trial.value)
+
+    print("  Params: ")
+    for key, value in trial.params.items():
+        print("    {}: {}".format(key, value))
 
 
-g = update_feature()
-trainer.run(idx_loader_train, max_epochs=NEPOCHS)
-# trainer.run(idx_loader, max_epochs=NEPOCHS)
+opt()
