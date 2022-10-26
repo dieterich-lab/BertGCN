@@ -59,6 +59,25 @@ logging.basicConfig(
 optuna.logging.enable_propagation()
 optuna.logging.disable_default_handler() 
 
+dataset_file = Path("data") / "medindcls_bert.json"
+if not dataset_file.exists():
+    logging.info("Creating dataset")
+    dataset = CleanClinicDataset(tokenizer=tokenizer, clean=False)
+    with open(dataset_file, "wb") as f:
+        logging.info(f"Saving dataset under {dataset_file}")
+        pickle.dump(dataset, f)
+else:
+    logging.info(f"Loading dataset from: {dataset_file}")
+    with open(dataset_file, "rb") as f:
+        dataset = pickle.load(f)
+
+idx = np.arange(len(dataset))
+random.shuffle(idx)
+train_idx, val_idx, test_idx = (
+    idx[: int(len(idx) * 0.7)],
+    idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
+    idx[int(len(idx) * 0.8) :],
+    )
 def objective(trial):
 
     adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask, _, _ = load_corpus(
@@ -98,25 +117,6 @@ def objective(trial):
 
     tokenizer = AutoTokenizer.from_pretrained(MODELPATH)
 
-    dataset_file = Path("data") / "medindcls_bert.json"
-    if not dataset_file.exists():
-        logging.info("Creating dataset")
-        dataset = CleanClinicDataset(tokenizer=tokenizer, clean=False)
-        with open(dataset_file, "wb") as f:
-            logging.info(f"Saving dataset under {dataset_file}")
-            pickle.dump(dataset, f)
-    else:
-        logging.info(f"Loading dataset from: {dataset_file}")
-        with open(dataset_file, "rb") as f:
-            dataset = pickle.load(f)
-
-    idx = np.arange(len(dataset))
-    random.shuffle(idx)
-    train_idx, val_idx, test_idx = (
-        idx[: int(len(idx) * 0.7)],
-        idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
-        idx[int(len(idx) * 0.8) :],
-    )
 
     # logging.info(f"Len idx: {len(train_idx)} {len(val_idx)} {len(test_idx)}")
 
@@ -130,29 +130,33 @@ def objective(trial):
     )
 
     # logging.info(f"First train text examples (first 300 chars): {tokenizer.decode(input_ids[0])[:300]}")
-    # logging.info(f"Label: {y[0]}, {dataset.LE.classes_[0]}")
+    # logging.info(f"Label: {y[0]}, {dataset.LE.classes_[y[0]]}")
+    # train_labels = np.unique(dataset.labels[train_idx])
+    # logging.info(f"Train labels: {train_labels}, {len(train_labels)}")
+    assert np.array_equal(y[:nb_train], dataset.labels[train_idx])
     # logging.info(f"First val text examples (first 300 chars): {tokenizer.decode(input_ids[nb_train + nb_word])[:300]}")
-    # logging.info(f"Label: {y[nb_train + nb_word]}, {dataset.LE.classes_[0]}")
+    # logging.info(f"Label: {y[nb_train + nb_word]}, {dataset.LE.classes_[y[nb_train + nb_word]]}")
+    # val_labels = np.unique(dataset.labels[val_idx])
+    # logging.info(f"Val labels: {val_labels}, {len(val_labels)}")
+    assert np.array_equal(y[nb_train + nb_word : nb_train + nb_word + nb_val], dataset.labels[val_idx])
     # logging.info(f"First test text examples (first 300 chars): {tokenizer.decode(input_ids[-nb_test])[:300]}")
-    # logging.info(f"Label: {y[-nb_test]}, {dataset.LE.classes_[0]}")
+    # logging.info(f"Label: {y[-nb_test]}, {dataset.LE.classes_[y[-nb_test]]}")
+    # test_labels = np.unique(dataset.labels[test_idx])
+    # logging.info(f"Test labels: {test_labels}, {len(test_labels)}")
+    assert np.array_equal(y[-nb_test:], dataset.labels[test_idx])
 
     # build DGL Graph
     adj_norm = normalize_adj(adj + sp.eye(adj.shape[0]))
-
-    # logging.info("graph information:")
-    # logging.info(str(graph))
 
     train_idx_dataset = Data.TensorDataset(torch.arange(0, nb_train, dtype=torch.long))
     val_idx_dataset = Data.TensorDataset(
         torch.arange(nb_train + nb_word, nb_train + nb_word + nb_val, dtype=torch.long)
     )
     test_idx_dataset = Data.TensorDataset(torch.arange(nb_node - nb_test, nb_node, dtype=torch.long))
-    # doc_idx_dataset = Data.ConcatDataset([train_idx_dataset, val_idx_dataset, test_idx_dataset])
 
     idx_loader_train = Data.DataLoader(train_idx_dataset, batch_size=BATCHSIZE)
     idx_loader_val = Data.DataLoader(val_idx_dataset, batch_size=BATCHSIZE)
     idx_loader_test = Data.DataLoader(test_idx_dataset, batch_size=BATCHSIZE)
-    # idx_loader = Data.DataLoader(doc_idx_dataset, batch_size=BATCHSIZE, shuffle=True)
 
     optimizer = torch.optim.Adam(
         [
@@ -177,19 +181,20 @@ def objective(trial):
     graph.ndata["cls_feats"] = torch.zeros((nb_node, model.feat_dim))
 
     def train_step(engine, batch):
-        engine.model.train()
-        engine.model = engine.model.to(device)
-        engine.graph = engine.graph.to(device)
+        nonlocal model, graph, optimizer, criterion
+        model.train()
+        model = model.to(device)
+        graph = graph.to(device)
         (idx,) = [x.to(device) for x in batch]
-        train_mask = engine.graph.ndata["train"][idx].type(torch.BoolTensor)
-        y_pred = engine.model(engine.graph, idx)[train_mask]
-        y_true = engine.graph.ndata["label_train"][idx][train_mask]
+        train_mask = graph.ndata["train"][idx].type(torch.BoolTensor)
+        y_pred = model(graph, idx)[train_mask]
+        y_true = graph.ndata["label_train"][idx][train_mask]
         loss = criterion(y_pred, y_true)
         loss.backward()
         if engine.state.iteration % ACCUSTEPS == 0:
             optimizer.step()
             optimizer.zero_grad()
-        engine.graph.ndata["cls_feats"].detach_()
+        graph.ndata["cls_feats"].detach_()
         train_loss = loss.item()
         return train_loss
 
@@ -209,8 +214,8 @@ def objective(trial):
         graph.ndata["cls_feats"][doc_mask] = cls_feat
 
     trainer = Engine(train_step)
-    trainer.model = model
-    trainer.graph = graph
+    # trainer.model = model
+    # trainer.graph = graph
     trainer.logger = setup_logger(level=30)
 
     scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
@@ -228,40 +233,34 @@ def objective(trial):
 
     @trainer.on(Events.EPOCH_COMPLETED)
     def reset_graph(trainer):
-        update_feature(trainer.graph, trainer.model)
+        nonlocal graph, model
+        update_feature(graph, model)
         torch.cuda.empty_cache()
 
     def eval_step(engine, batch):
+        nonlocal model, graph
         with torch.no_grad():
-            engine.model.eval()
-            engine.model = engine.model.to(device)
-            engine.graph = engine.graph.to(device)
+            model.eval()
+            model = model.to(device)
+            graph = graph.to(device)
             (idx,) = [x.to(device) for x in batch]
-            y_pred = engine.model(engine.graph, idx)
-            y_true = engine.graph.ndata["label"][idx]
+            y_pred = model(graph, idx)
+            y_true = graph.ndata["label"][idx]
             return y_pred, y_true
 
     train_evaluator = Engine(eval_step)
-    train_evaluator.model = model
-    train_evaluator.graph = graph
     train_evaluator.logger = setup_logger(level=30)
     val_evaluator = Engine(eval_step)
-    val_evaluator.model = model
-    val_evaluator.graph = graph
     val_evaluator.logger = setup_logger(level=30)
     pruning_handler = optuna.integration.PyTorchIgnitePruningHandler(trial, "accuracy", trainer)
     val_evaluator.add_event_handler(Events.COMPLETED, pruning_handler)
     test_evaluator = Engine(eval_step)
-    test_evaluator.model = model
-    test_evaluator.graph = graph
     test_evaluator.logger = setup_logger(level=30)
 
     metrics = {
         "accuracy": Accuracy(),
         "nll": Loss(criterion),
-        "cr": SklearnClassificationReport(
-            target_names=[dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels)[val_idx])]
-        ),
+        "cr": SklearnClassificationReport(target_names=dataset.LE.classes_)
     }
 
     for n, f in metrics.items():
@@ -275,7 +274,6 @@ def objective(trial):
 
     def score_function(engine):
         return -1.0 * engine.state.metrics["nll"]
-        # return engine.state.metrics["accuracy"]
 
     model_checkpoint = ModelCheckpoint(
         "models/gcn",
@@ -325,19 +323,19 @@ def objective(trial):
 
     update_feature(graph, model)
     trainer.run(idx_loader_train, max_epochs=NEPOCHS)
-    return test_evaluator.state.metrics["accuracy"]
+    return val_evaluator.state.metrics["accuracy"]
 
 
 study = optuna.create_study(direction="maximize")
-study.optimize(objective, n_trials=100, timeout=600)
+study.optimize(objective, n_trials=10)
 
-print.info("Number of finished trials: ", len(study.trials))
+print("Number of finished trials: ", len(study.trials))
 
-print.info("Best trial:")
+print("Best trial:")
 trial = study.best_trial
 
-print.info("  Value: ", trial.value)
+print("  Value: ", trial.value)
 
-print.info("  Params: ")
+print("  Params: ")
 for key, value in trial.params.items():
     print("    {}: {}".format(key, value))

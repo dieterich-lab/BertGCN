@@ -3,15 +3,15 @@ from sklearn.metrics import (
 	classification_report,
 )
 import torch
+import numpy as np
 
 # These decorators helps with distributed settings
 from ignite.metrics.metric import sync_all_reduce, reinit__is_reduced
 
 
 class SklearnClassificationReport(Metric):
-	def __init__(self, target_names=None, labels=None, output_transform=lambda x: x, device="cpu"):
+	def __init__(self, target_names=None, output_transform=lambda x: x, device="cpu"):
 		self.target_names = target_names
-		self.labels = labels
 		self.y_pred, self.y = list(), list()
 		super(SklearnClassificationReport, self).__init__(output_transform=output_transform, device=device)
 
@@ -34,6 +34,6 @@ class SklearnClassificationReport(Metric):
 	@sync_all_reduce("_num_examples", "_num_correct:SUM")
 	def compute(self):
 		report = classification_report(
-			self.y, self.y_pred, target_names=self.target_names, labels=self.labels, zero_division=0
+			self.y, self.y_pred, target_names=self.target_names, labels=np.unique(self.y), zero_division=0
 		)
 		return report
