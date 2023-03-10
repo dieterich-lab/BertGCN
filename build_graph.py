@@ -12,10 +12,8 @@ from transformers import AutoTokenizer
 
 from clinic_datasets import CleanClinicDataset
 
-
 random.seed(0)
 np.random.seed(0)
-
 
 MODELPATH = "deepset/gbert-base"
 EMBEDDIM = 768

@@ -10,7 +10,7 @@ import torch
 import torch.utils.data as Data
 from ignite.engine import Engine, Events
 from ignite.handlers import EarlyStopping, ModelCheckpoint
-from ignite.handlers.param_scheduler import LRScheduler, create_lr_scheduler_with_warmup
+# from ignite.handlers.param_scheduler import LRScheduler, create_lr_scheduler_with_warmup
 from ignite.metrics import Accuracy, ClassificationReport, Loss
 from ignite.utils import setup_logger
 from torch.optim.lr_scheduler import ExponentialLR, ReduceLROnPlateau
@@ -18,7 +18,7 @@ from transformers import AutoTokenizer
 
 from clinic_datasets import CleanClinicDataset
 from metrics import SklearnClassificationReport
-from model import BertGAT, BertGCN
+from model import BertGCN
 from params import parse_args
 from utils import *
 
@@ -28,7 +28,7 @@ random.seed(0)
 np.random.seed(0)
 torch.manual_seed(0)
 
-MODELPATH = "deepset/gbert-base"
+MODELTYPE = "deepset/gbert-base"
 BERTLR = 5e-5
 GCNLR = 3e-5
 LR = 4e-5
@@ -37,11 +37,12 @@ NEPOCHS = 50
 ACCUSTEPS = 8
 LOGINTERVALL = 100
 DATASET = "med_indication_all_RF_diag"
-PRETRAINDCKPT = Path("models/finetuned/gbert-base_med_indication_all_RF_diag_best.pt")
+DATASETPATH =  Path("data") / f"ind.{DATASET}"
+DATASETFILE = Path("data") / "medindcls_bert.json"
+BERTPATH = Path("models/finetuned/gbert-base_med_indication_all_RF_diag_best.pt")
 
-SAVEPATH = f"{Path(MODELPATH).stem}"
 
-tokenizer = AutoTokenizer.from_pretrained(MODELPATH)
+tokenizer = AutoTokenizer.from_pretrained(MODELTYPE)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -56,20 +57,27 @@ logging.basicConfig(
     ],
 )
 
-optuna.logging.enable_propagation()
-optuna.logging.disable_default_handler() 
+logging.info(f"{'=== Params ===':>32}")
+for k, v in vars(args).items():
+    logging.info(f"{k:>25} : {str(v):<25}")
 
-dataset_file = Path("data") / "medindcls_bert.json"
-if not dataset_file.exists():
+optuna.logging.enable_propagation()
+optuna.logging.disable_default_handler()
+
+if not DATASETFILE.exists():
     logging.info("Creating dataset")
     dataset = CleanClinicDataset(tokenizer=tokenizer, clean=False)
-    with open(dataset_file, "wb") as f:
-        logging.info(f"Saving dataset under {dataset_file}")
+    with open(DATASETFILE, "wb") as f:
+        logging.info(f"Saving dataset under {DATASETFILE}")
         pickle.dump(dataset, f)
 else:
-    logging.info(f"Loading dataset from: {dataset_file}")
-    with open(dataset_file, "rb") as f:
+    logging.info(f"Loading dataset from: {DATASETFILE}")
+    with open(DATASETFILE, "rb") as f:
         dataset = pickle.load(f)
+
+GCNNAME = f"{Path(MODELTYPE).stem}_{dataset}.pt"
+SAVEPATH = Path(f"models/gcn/{args.mixfactor}")
+GCNPATH = SAVEPATH / GCNNAME
 
 idx = np.arange(len(dataset))
 random.shuffle(idx)
@@ -77,67 +85,40 @@ train_idx, val_idx, test_idx = (
     idx[: int(len(idx) * 0.7)],
     idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
     idx[int(len(idx) * 0.8) :],
-    )
+)
+
 
 def objective(trial):
 
-    adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask, _, _ = load_corpus(
-        DATASET
-    )
+    adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask, _, _ = load_corpus(DATASETPATH)
 
-<<<<<<< HEAD
-# logging.info(f"First train text examples (first 300 chars): {tokenizer.decode(input_ids[0])[:300]}")
-# logging.info(f"Label: {y[0]}, {dataset.LE.classes_[y[0]]}")
-# train_labels = np.unique(dataset.labels[train_idx])
-# logging.info(f"Train labels: {train_labels}, {len(train_labels)}")
-assert np.array_equal(y[:nb_train], dataset.labels[train_idx])
-# logging.info(f"First val text examples (first 300 chars): {tokenizer.decode(input_ids[nb_train + nb_word])[:300]}")
-# logging.info(f"Label: {y[nb_train + nb_word]}, {dataset.LE.classes_[y[nb_train + nb_word]]}")
-# val_labels = np.unique(dataset.labels[val_idx])
-# logging.info(f"Val labels: {val_labels}, {len(val_labels)}")
-assert np.array_equal(y[nb_train + nb_word : nb_train + nb_word + nb_val], dataset.labels[val_idx])
-# logging.info(f"First test text examples (first 300 chars): {tokenizer.decode(input_ids[-nb_test])[:300]}")
-# logging.info(f"Label: {y[-nb_test]}, {dataset.LE.classes_[y[-nb_test]]}")
-# test_labels = np.unique(dataset.labels[test_idx])
-# logging.info(f"Test labels: {test_labels}, {len(test_labels)}")
-assert np.array_equal(y[-nb_test:], dataset.labels[test_idx])
-
-# build DGL Graph
-adj_norm = normalize_adj(adj + sp.eye(adj.shape[0]))
-graph = dgl.from_scipy(adj_norm.astype("float32"), eweight_name="edge_weight")
-graph.ndata["input_ids"] = input_ids
-graph.ndata["label"], graph.ndata["train"], graph.ndata["val"], graph.ndata["test"] = (
-    torch.LongTensor(y),
-    torch.FloatTensor(train_mask),
-    torch.FloatTensor(val_mask),
-    torch.FloatTensor(test_mask),
-)
-graph.ndata["label_train"] = torch.LongTensor(y_train)
-graph.ndata["cls_feats"] = torch.zeros((nb_node, model.feat_dim))
-=======
     nb_node = features.shape[0]
     nb_train, nb_val, nb_test = train_mask.sum(), val_mask.sum(), test_mask.sum()
     nb_word = nb_node - nb_train - nb_val - nb_test
     nb_class = y_train.shape[1]
 
-    # if gcn_model == "gcn":
     model = BertGCN(
         nb_class=nb_class,
-        pretrained_model="deepset/gbert-base",
-        mix_factor=trial.suggest_uniform("mix_factor", 0, 1),
-        # mix_factor=args.mixfactor,
+        pretrained_model="deepset/gbert-base", # parameters will be overwritten with fine-tuned weights
+        mix_factor=args.mixfactor if trial in ["train", "test"] else trial.suggest_uniform("mix_factor", 0, 1),
         gcn_layers=2,
         n_hidden=200,
         dropout=0.5,
     )
 
-    logging.info(
-        f"Loading pretrained bert model from {PRETRAINDCKPT} saved on {datetime.datetime.fromtimestamp(PRETRAINDCKPT.stat().st_ctime)}"
-    )
-    ckpt = torch.load(PRETRAINDCKPT, map_location=device)
-    model.bert_model.load_state_dict(ckpt["bert_model"])
-    model.classifier.load_state_dict(ckpt["classifier"])
->>>>>>> optuna
+    if trial == "test":
+        logging.info(
+            f"Loading pretrained gcn model from {GCNPATH} saved on {datetime.datetime.fromtimestamp(GCNPATH.stat().st_ctime)}"
+        )
+        model.load_state_dict(torch.load(GCNPATH))
+        # model.load_state_dict(torch.load(GCNPATH, map_location=torch.device("cpu")))
+    else:
+        logging.info(
+            f"Loading pretrained bert model from {BERTPATH} saved on {datetime.datetime.fromtimestamp(BERTPATH.stat().st_ctime)}"
+        )
+        ckpt = torch.load(BERTPATH, map_location=device)
+        model.bert_model.load_state_dict(ckpt["bert_model"])
+        model.classifier.load_state_dict(ckpt["classifier"])
 
     # transform one-hot label to class ID for pytorch computation
     y = y_train + y_test + y_val
@@ -147,8 +128,7 @@ graph.ndata["cls_feats"] = torch.zeros((nb_node, model.feat_dim))
     # document mask used for update feature
     doc_mask = train_mask + val_mask + test_mask
 
-    tokenizer = AutoTokenizer.from_pretrained(MODELPATH)
-
+    tokenizer = AutoTokenizer.from_pretrained(MODELTYPE)
 
     # logging.info(f"Len idx: {len(train_idx)} {len(val_idx)} {len(test_idx)}")
 
@@ -218,54 +198,6 @@ graph.ndata["cls_feats"] = torch.zeros((nb_node, model.feat_dim))
         model = model.to(device)
         graph = graph.to(device)
         (idx,) = [x.to(device) for x in batch]
-<<<<<<< HEAD
-        y_pred = model(graph, idx)
-        y_true = graph.ndata["label"][idx]
-        return y_pred, y_true
-
-
-train_evaluator = Engine(eval_step)
-train_evaluator.logger = setup_logger(level=30)
-val_evaluator = Engine(eval_step)
-val_evaluator.logger = setup_logger(level=30)
-test_evaluator = Engine(eval_step)
-test_evaluator.logger = setup_logger(level=30)
-
-metrics = {
-    "accuracy": Accuracy(),
-    "nll": Loss(criterion),
-    "cr": SklearnClassificationReport(target_names=dataset.LE.classes_)
-}
-
-for n, f in metrics.items():
-    f.attach(train_evaluator, n)
-
-for n, f in metrics.items():
-    f.attach(val_evaluator, n)
-
-for n, f in metrics.items():
-    f.attach(test_evaluator, n)
-
-
-def score_function(engine):
-    return -1.0 * engine.state.metrics["nll"]
-    # return engine.state.metrics["accuracy"]
-
-
-model_checkpoint = ModelCheckpoint(
-    "models/gcn",
-    n_saved=1,
-    filename_pattern=f"{SAVEPATH}_{dataset}_best.pt",
-    score_function=score_function,
-    score_name="accuracy",
-    global_step_transform=lambda *_: trainer.state.epoch,
-    require_empty=False,
-)
-val_evaluator.add_event_handler(Events.COMPLETED, model_checkpoint, {"model": model})
-
-stopping_handler = EarlyStopping(patience=3, score_function=score_function, trainer=trainer)
-val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
-=======
         train_mask = graph.ndata["train"][idx].type(torch.BoolTensor)
         y_pred = model(graph, idx)[train_mask]
         y_true = graph.ndata["label_train"][idx][train_mask]
@@ -285,7 +217,7 @@ val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
             model = model.to(device)
             model.eval()
             cls_list = []
-            logging.info("Udating features...")
+            logging.info("Updating features...")
             for batch in dataloader:
                 input_ids = [x.to(device) for x in batch][0]
                 output = model.bert_model(input_ids=input_ids)[0][:, 0]
@@ -295,8 +227,6 @@ val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
         graph.ndata["cls_feats"][doc_mask] = cls_feat
 
     trainer = Engine(train_step)
-    # trainer.model = model
-    # trainer.graph = graph
     trainer.logger = setup_logger(level=30)
 
     scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
@@ -332,15 +262,16 @@ val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
     train_evaluator.logger = setup_logger(level=30)
     val_evaluator = Engine(eval_step)
     val_evaluator.logger = setup_logger(level=30)
-    pruning_handler = optuna.integration.PyTorchIgnitePruningHandler(trial, "accuracy", trainer)
-    val_evaluator.add_event_handler(Events.COMPLETED, pruning_handler)
+    if trial not in ["train", "test"]:
+        pruning_handler = optuna.integration.PyTorchIgnitePruningHandler(trial, "accuracy", trainer)
+        val_evaluator.add_event_handler(Events.COMPLETED, pruning_handler)
     test_evaluator = Engine(eval_step)
-    test_evaluator.logger = setup_logger(level=30)
+    test_evaluator.logger = setup_logger(level=20)
 
     metrics = {
         "accuracy": Accuracy(),
         "nll": Loss(criterion),
-        "cr": SklearnClassificationReport(target_names=dataset.LE.classes_)
+        "cr": SklearnClassificationReport(target_names=dataset.LE.classes_),
     }
 
     for n, f in metrics.items():
@@ -356,15 +287,14 @@ val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
         return -1.0 * engine.state.metrics["nll"]
 
     model_checkpoint = ModelCheckpoint(
-        "models/gcn",
+        SAVEPATH,
         n_saved=1,
-        filename_pattern=f"{SAVEPATH}_{dataset}_best.pt",
+        filename_pattern=GCNNAME,
         score_function=score_function,
         score_name="accuracy",
         global_step_transform=lambda *_: trainer.state.epoch,
         require_empty=False,
     )
->>>>>>> optuna
 
     val_evaluator.add_event_handler(Events.COMPLETED, model_checkpoint, {"model": model})
 
@@ -394,18 +324,32 @@ val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
             f"Validation Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
         )
 
-    @trainer.on(Events.COMPLETED)
-    def log_test_results(trainer):
-        test_evaluator.run(idx_loader_test)
-        metrics = test_evaluator.state.metrics
-        logging.info(
-            f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
-        )
-        logging.info(metrics["cr"])
+    # @trainer.on(Events.COMPLETED)
+    # def log_test_results(trainer):
+    #     test_evaluator.run(idx_loader_test)
+    #     metrics = test_evaluator.state.metrics
+    #     logging.info(
+    #         f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
+    #     )
+    #     logging.info(metrics["cr"])
 
     update_feature()
-    trainer.run(idx_loader_train, max_epochs=NEPOCHS)
-    return val_evaluator.state.metrics["accuracy"]
+    if trial != "test":
+        trainer.run(idx_loader_train, max_epochs=NEPOCHS)
+        if trial != "train":
+            return val_evaluator.state.metrics["accuracy"]
+    logging.info(
+        f"Loading best gcn model from {GCNPATH} saved on {datetime.datetime.fromtimestamp(GCNPATH.stat().st_ctime)}"
+    )
+    model.load_state_dict(torch.load(GCNPATH))
+    # model.load_state_dict(torch.load(GCNPATH, map_location=torch.device("cpu")))
+    update_feature()
+    test_evaluator.run(idx_loader_test)
+    metrics = test_evaluator.state.metrics
+    logging.info(
+        f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
+    )
+    logging.info(metrics["cr"])
 
 
 def opt():
@@ -424,4 +368,6 @@ def opt():
         print("    {}: {}".format(key, value))
 
 
-opt()
+# opt()
+objective("train")
+# objective("test")

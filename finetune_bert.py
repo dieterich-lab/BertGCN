@@ -1,4 +1,4 @@
-import json
+import datetime
 import os
 import pickle
 import random
@@ -12,14 +12,12 @@ from ignite.handlers import EarlyStopping
 from ignite.handlers.param_scheduler import create_lr_scheduler_with_warmup
 from ignite.metrics import Accuracy, Loss
 from ignite.utils import convert_tensor
-from sklearn.metrics import accuracy_score
 from torch.optim.lr_scheduler import ExponentialLR, ReduceLROnPlateau
 from torch.utils.data import DataLoader, Subset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from clinic_datasets import CleanClinicDataset
 from metrics import SklearnClassificationReport
-
 
 MODELPATH = "deepset/gbert-base"
 LEARNINGRATE = 5e-5
@@ -46,6 +44,8 @@ else:
     with open(dataset_file, "rb") as f:
         dataset = pickle.load(f)
 
+SAVEPATH = Path(f"models/finetuned/{SAVENAME}_{dataset}_best.pt")
+
 model = AutoModelForSequenceClassification.from_pretrained(MODELPATH, num_labels=len(dataset.LE.classes_))
 
 idx = np.arange(len(dataset))
@@ -63,17 +63,24 @@ train_loader = DataLoader(train_dataset, batch_size=BATCHSIZE, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=BATCHSIZE, shuffle=False)
 test_loader = DataLoader(test_dataset, batch_size=BATCHSIZE, shuffle=False)
 
-# print("First train set example:")
-print(f"First train examples (first 300 tokens): {dataset.texts[train_dataset.indices[0]][:300]}")
-print(f"Label: {dataset.examples[train_dataset.indices[0]]['labels']}")
-print(f"First val examples (first 300 tokens): {dataset.texts[val_dataset.indices[0]][:300]}")
-print(f"Label: {dataset.examples[val_dataset.indices[0]]['labels']}")
-print(f"First test examples (first 300 tokens): {dataset.texts[test_dataset.indices[0]][:300]}")
-print(f"Label: {dataset.examples[test_dataset.indices[0]]['labels']}")
-print(f"Len datsets: {len(train_dataset)}, {len(val_dataset)}, {len(test_dataset)}")
+# print(f"First train examples (first 300 tokens): {dataset.texts[train_dataset.indices[0]][:300]}")
+# print(f"Label: {dataset.examples[train_dataset.indices[0]]['labels']}")
+# print(f"First val examples (first 300 tokens): {dataset.texts[val_dataset.indices[0]][:300]}")
+# print(f"Label: {dataset.examples[val_dataset.indices[0]]['labels']}")
+# print(f"First test examples (first 300 tokens): {dataset.texts[test_dataset.indices[0]][:300]}")
+# print(f"Label: {dataset.examples[test_dataset.indices[0]]['labels']}")
+# print(f"Len datsets: {len(train_dataset)}, {len(val_dataset)}, {len(test_dataset)}")
 print(Counter([dataset.LE.classes_[dataset.labels[x]] for x in train_dataset.indices]))
 print(Counter([dataset.LE.classes_[dataset.labels[x]] for x in val_dataset.indices]))
 print(Counter([dataset.LE.classes_[dataset.labels[x]] for x in test_dataset.indices]))
+print(
+    Counter(
+        [
+            dataset.LE.classes_[dataset.labels[x]]
+            for x in train_dataset.indices.tolist() + val_dataset.indices.tolist() + test_dataset.indices.tolist()
+        ]
+    )
+)
 
 optimizer = torch.optim.AdamW(model.parameters(), LEARNINGRATE)
 criterion = torch.nn.CrossEntropyLoss()
@@ -140,8 +147,7 @@ for n, f in metrics.items():
 
 
 def score_function(engine):
-    return -1. * engine.state.metrics["nll"]
-    # return engine.state.metrics["accuracy"]
+    return -1.0 * engine.state.metrics["nll"]
 
 
 stopping_handler = EarlyStopping(patience=3, score_function=score_function, trainer=trainer)
@@ -168,20 +174,28 @@ def log_validation_results(trainer):
             os.path.join(f"models/finetuned/{SAVENAME}_{dataset}_best.pt"),
         )
         log_validation_results.best_val_acc = metrics["accuracy"]
-    # print("Classification report")
-    # print(json.dumps(metrics["cr"], indent=4, default=str))
 
 
-@trainer.on(Events.COMPLETED)
-def log_test_results(trainer):
-    test_evaluator.run(test_loader)
-    metrics = test_evaluator.state.metrics
-    print(
-        f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
-    )
-    print("Classification report")
-    print(metrics["cr"])
+# @trainer.on(Events.COMPLETED)
+# def log_test_results(trainer):
+#     test_evaluator.run(test_loader)
+#     metrics = test_evaluator.state.metrics
+#     print(
+#         f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
+#     )
+#     print("Classification report")
+#     print(metrics["cr"])
 
 
 log_validation_results.best_val_acc = 0
 trainer.run(train_loader, max_epochs=NEPOCHS)
+print(f"Loading best gcn model from {SAVEPATH} saved on {datetime.datetime.fromtimestamp(SAVEPATH.stat().st_ctime)}")
+ckpt = torch.load(SAVEPATH)
+model.bert.load_state_dict(ckpt["bert_model"])
+model.classifier.load_state_dict(ckpt["classifier"])
+test_evaluator.run(test_loader)
+metrics = test_evaluator.state.metrics
+print(
+    f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
+)
+print(metrics["cr"])

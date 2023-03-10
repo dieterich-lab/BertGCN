@@ -1,3 +1,4 @@
+import torch
 import torch as th
 import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
@@ -41,19 +42,35 @@ class BertGCN(th.nn.Module):
 
     def forward(self, graph, idx):
         input_ids = graph.ndata["input_ids"][idx]
-        # input_ids, attention_mask = g.ndata['input_ids'][idx], g.ndata['attention_mask'][idx]
         if self.training:
             cls_feats = self.bert_model(input_ids)[0][:, 0]
             graph.ndata["cls_feats"][idx] = cls_feats
         else:
             cls_feats = graph.ndata["cls_feats"][idx]
         cls_logit = self.classifier(cls_feats)
-        cls_pred = th.nn.Softmax(dim=1)(cls_logit)
         gcn_logit = self.gcn(graph.ndata["cls_feats"], graph, graph.edata["edge_weight"])[idx]
+        bert_pred = th.nn.Softmax(dim=1)(cls_logit)
         gcn_pred = th.nn.Softmax(dim=1)(gcn_logit)
-        pred = (gcn_pred + 1e-10) * self.mix_factor + cls_pred * (1 - self.mix_factor)
+        pred = (gcn_pred + 1e-10) * self.mix_factor + bert_pred * (1 - self.mix_factor)
         pred = th.log(pred)
-        # pred = (gcn_logit + 1e-10) * self.mix_factor + cls_logit * (1 - self.mix_factor)
+        # pred = cls_logit + gcn_logit
+        return pred
+
+    # def explain_forward(self, graph, target_id2, mask):
+    def explain_forward(self, doc_feats, graph, target_id2, doc_mask):
+        batch_size = int(len(doc_feats) / doc_mask.sum())
+
+        cls_feats = graph.ndata["cls_feats"]
+
+        gcn_logits = list()
+        doc_feats = doc_feats.view(batch_size, doc_mask.sum(), -1)
+        for i in range(batch_size):
+            cls_feats_ = cls_feats.clone()
+            cls_feats_[doc_mask] = doc_feats[i]
+            gcn_logit = self.gcn(cls_feats_, graph, graph.edata["edge_weight"])[target_id2]
+            gcn_logits.append(gcn_logit)
+
+        pred = torch.stack(gcn_logits)
         return pred
 
 

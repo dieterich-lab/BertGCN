@@ -17,7 +17,7 @@ def parse_args(*args):
     parser.add_argument("--gpus", "-g", type=int, nargs="+", default=[0], choices=[0, 1, 2, 3])
     parser.add_argument("--batchsize", default=1, type=int)
     parser.add_argument("--nepochs", default=50, type=int)
-    parser.add_argument("--mixfactor", default=0.7, type=float)
+    parser.add_argument("--mixfactor", default=.4, type=float, help="Denotes how much percentage of the GCN are taken.")
     parser.add_argument("--gradacc", default=32, type=int)
     parser.add_argument("--checkpoint", type=int, help="Load model from a specific checkpoint.")
     parser.add_argument("-a", "--accelerator", default="gpu", type=str, choices=["gpu", "cpu"])
@@ -25,7 +25,8 @@ def parse_args(*args):
         "-s", "--simple", action="store_true", help="Uses simplified transformations for rnn and trans."
     )
     parser.add_argument(
-        "--clean", action="store_true",
+        "--clean",
+        action="store_true",
         help="If false, don't use stop words to filter the dataset for the BERT model during training.",
     )
     parser.add_argument("--report", action="store_true", help="Report dataset statistics.")

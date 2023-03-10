@@ -8,7 +8,6 @@ from torch.utils.data import Dataset
 
 stop_words = stopwords.words("german")
 
-
 class CleanClinicDataset(Dataset):
     def __init__(
         self,
@@ -24,6 +23,8 @@ class CleanClinicDataset(Dataset):
         self.task = task
         lines = open(self.file_path, "r").readlines()
         self.texts, self.labels, diagnoses, anamneses, risk_factors = list(), list(), list(), list(), list()
+        self.label2id = dict()
+        enum = 0
         for i, line in enumerate(lines):
             (
                 _,
@@ -35,7 +36,11 @@ class CleanClinicDataset(Dataset):
                 medication_name,
                 label,
             ) = line.split("|||")
-
+            if not medication_name in self.label2id:
+                self.label2id[medication_name] = enum
+                enum += 1
+            # id = self.label2id[medication_name]
+            # text_list = f"{id} [SEP] {discharge_letter.strip()}".split()
             text_list = f"Arznei {medication_name} & {discharge_letter.strip()}".split()
             if clean:
                 self.texts.append(" ".join(x for x in text_list if x.lower() not in stop_words))
