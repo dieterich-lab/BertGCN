@@ -9,7 +9,7 @@ import optuna
 import torch
 import torch.utils.data as Data
 from ignite.engine import Engine, Events
-from ignite.handlers import EarlyStopping, ModelCheckpoint
+from ignite.handlers import EarlyStopping, ModelCheckpoint, Checkpoint
 # from ignite.handlers.param_scheduler import LRScheduler, create_lr_scheduler_with_warmup
 from ignite.metrics import Accuracy, ClassificationReport, Loss
 from ignite.utils import setup_logger
@@ -88,7 +88,7 @@ train_idx, val_idx, test_idx = (
 )
 
 
-def objective(trial):
+def run(trial):
 
     adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask, _, _ = load_corpus(DATASETPATH)
 
@@ -227,7 +227,7 @@ def objective(trial):
         graph.ndata["cls_feats"][doc_mask] = cls_feat
 
     trainer = Engine(train_step)
-    trainer.logger = setup_logger(level=30)
+    trainer.logger = setup_logger("trainer", level=30)
 
     scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
 
@@ -258,15 +258,18 @@ def objective(trial):
             y_true = graph.ndata["label"][idx]
             return y_pred, y_true
 
-    train_evaluator = Engine(eval_step)
-    train_evaluator.logger = setup_logger(level=30)
+    # train_evaluator = Engine(eval_step)
+    # train_evaluator.logger = setup_logger("train evaluator", level=30)
+
     val_evaluator = Engine(eval_step)
-    val_evaluator.logger = setup_logger(level=30)
+    val_evaluator.logger = setup_logger("val evaluator", level=30)
+
     if trial not in ["train", "test"]:
         pruning_handler = optuna.integration.PyTorchIgnitePruningHandler(trial, "accuracy", trainer)
         val_evaluator.add_event_handler(Events.COMPLETED, pruning_handler)
+
     test_evaluator = Engine(eval_step)
-    test_evaluator.logger = setup_logger(level=20)
+    test_evaluator.logger = setup_logger("test evaluator", level=30)
 
     metrics = {
         "accuracy": Accuracy(),
@@ -274,8 +277,8 @@ def objective(trial):
         "cr": SklearnClassificationReport(target_names=dataset.LE.classes_),
     }
 
-    for n, f in metrics.items():
-        f.attach(train_evaluator, n)
+    # for n, f in metrics.items():
+    #     f.attach(train_evaluator, n)
 
     for n, f in metrics.items():
         f.attach(val_evaluator, n)
@@ -285,6 +288,22 @@ def objective(trial):
 
     def score_function(engine):
         return -1.0 * engine.state.metrics["nll"]
+
+    # val_evaluator.run(idx_loader_val)
+    # raise
+
+    to_save = {'model': model, 'optimizer': optimizer, 'trainer': trainer}
+
+    # checkpoint = ModelCheckpoint(
+    #     to_save,
+    #     SAVEPATH,
+    #     n_saved=1,
+    #     filename_pattern=GCNNAME,
+    #     score_function=score_function,
+    #     score_name="accuracy",
+    #     global_step_transform=lambda *_: trainer.state.epoch,
+    #     require_empty=False,
+    # )
 
     model_checkpoint = ModelCheckpoint(
         SAVEPATH,
@@ -298,7 +317,7 @@ def objective(trial):
 
     val_evaluator.add_event_handler(Events.COMPLETED, model_checkpoint, {"model": model})
 
-    stopping_handler = EarlyStopping(patience=3, score_function=score_function, trainer=trainer)
+    stopping_handler = EarlyStopping(patience=args.patience, score_function=score_function, trainer=trainer)
     val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
 
     # @trainer.on(Events.ITERATION_COMPLETED(every=LOGINTERVALL))
@@ -334,27 +353,33 @@ def objective(trial):
     #     logging.info(metrics["cr"])
 
     update_feature()
+
     if trial != "test":
         trainer.run(idx_loader_train, max_epochs=NEPOCHS)
         if trial != "train":
             return val_evaluator.state.metrics["accuracy"]
+
     logging.info(
         f"Loading best gcn model from {GCNPATH} saved on {datetime.datetime.fromtimestamp(GCNPATH.stat().st_ctime)}"
     )
     model.load_state_dict(torch.load(GCNPATH))
-    # model.load_state_dict(torch.load(GCNPATH, map_location=torch.device("cpu")))
+
+    # checkpoint = torch.load(GCNPATH, map_location=device) 
+    # Checkpoint.load_objects(to_load=to_save, checkpoint=checkpoint) 
+
+    
     update_feature()
     test_evaluator.run(idx_loader_test)
     metrics = test_evaluator.state.metrics
     logging.info(
-        f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
+        f"Test results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
     )
     logging.info(metrics["cr"])
 
 
-def opt():
+def optimize():
     study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=10)
+    study.optimize(run, n_trials=10)
 
     print("Number of finished trials: ", len(study.trials))
 
@@ -368,6 +393,8 @@ def opt():
         print("    {}: {}".format(key, value))
 
 
-# opt()
-objective("train")
-# objective("test")
+if args.optimize:
+    optimize()
+else:
+    run("train")
+    # run("test")

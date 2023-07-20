@@ -1,4 +1,5 @@
 import numpy as np
+import warnings
 import torch
 from ignite.metrics import Metric
 
@@ -31,9 +32,12 @@ class SklearnClassificationReport(Metric):
 
     @sync_all_reduce("_num_examples", "_num_correct:SUM")
     def compute(self):
+        target_names = [self.target_names[i] for i in np.unique(self.y)]
+        warnings.filterwarnings("ignore")
         report = classification_report(
-            self.y, self.y_pred, target_names=self.target_names, labels=np.unique(self.y), zero_division=0
+            self.y, self.y_pred, target_names=target_names, labels=np.unique(self.y), zero_division=0
         )
+        warnings.resetwarnings()
         return report
 
 class CM(Metric):

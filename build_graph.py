@@ -36,6 +36,18 @@ train_dataset = Subset(dataset, train_idx)
 val_dataset = Subset(dataset, val_idx)
 test_dataset = Subset(dataset, test_idx)
 
+# id['&'] = 1562
+
+examples = np.array([x["input_ids"] for x in dataset.examples])
+starts = np.argmax((np.array(examples) == 1562), axis=1) + 1
+mask = np.zeros(examples.shape)
+mask[np.arange(2699), starts] = 1
+mask = mask.cumsum(axis=-1)
+mask = mask != 1
+examples[mask] = tokenizer.pad_token_id
+
+
+
 print("Len datasets:", len(train_dataset), len(val_dataset), len(test_dataset))
 
 # build vocab
@@ -159,7 +171,7 @@ for doc_id in val_dataset.indices:
     words = doc_words.split()
     for word in words:
         word_id = word2id[word]
-        doc_word_str = str(train_size + doc_id) + "," + str(word_id)
+        doc_word_str = str(doc_id) + "," + str(word_id)
         doc_word_freq[doc_word_str] += 1
 
 for doc_id in test_dataset.indices:
@@ -167,7 +179,7 @@ for doc_id in test_dataset.indices:
     words = doc_words.split()
     for word in words:
         word_id = word2id[word]
-        doc_word_str = str(train_size + doc_id) + "," + str(word_id)
+        doc_word_str = str(doc_id) + "," + str(word_id)
         doc_word_freq[doc_word_str] += 1
 
 for c, i in enumerate(train_dataset.indices):
@@ -182,7 +194,7 @@ for c, i in enumerate(train_dataset.indices):
         freq = doc_word_freq[key]
         row.append(c)
         col.append(train_size + j)
-        idf = log(1.0 * len(dataset) / word_in_doc_counts[vocab[j]])
+        idf = log(1.0 * len(dataset) / word_in_doc_counts[word])
         weight.append(freq * idf)
         doc_word_set.add(word)
 
@@ -198,7 +210,7 @@ for c, i in enumerate(val_dataset.indices):
         freq = doc_word_freq[key]
         row.append(train_size + vocab_size + c)
         col.append(train_size + j)
-        idf = log(1.0 * len(dataset) / word_in_doc_counts[vocab[j]])
+        idf = log(1.0 * len(dataset) / word_in_doc_counts[word])
         weight.append(freq * idf)
         doc_word_set.add(word)
 

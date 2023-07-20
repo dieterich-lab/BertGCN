@@ -59,8 +59,12 @@ else:
 GCNNAME = f"{Path(MODELTYPE).stem}_{dataset}.pt"
 SAVEPATH = Path(f"models/gcn/{args.mixfactor}")
 GCNPATH= SAVEPATH / GCNNAME
-IGFILE = SAVEPATH / "ig_attrs.json"
-SHAPFILE = SAVEPATH / "shap_values.json"
+if args.interpret_mode == "gcn_only":
+    IGFILE = SAVEPATH / "_ig_attrs_gcn_only.json"
+    SHAPFILE = SAVEPATH / "_shap_values_gcn_only.json"
+elif args.interpret_mode == "gcn_bert":
+    IGFILE = SAVEPATH / "_ig_attrs_gcn_bert.json"
+    SHAPFILE = SAVEPATH / "_shap_values_gcn_bert.json"
 
 idx = np.arange(len(dataset))
 random.shuffle(idx)
@@ -73,11 +77,11 @@ train_idx, val_idx, test_idx = (
 
 test_dataset = Subset(dataset, test_idx)
 
-train_idx, val_idx, test_idx = (
-    idx[: int(len(idx) * 0.7)],
-    idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
-    idx[int(len(idx) * 0.8) :],
-)
+# train_idx, val_idx, test_idx = (
+#     idx[: int(len(idx) * 0.7)],
+#     idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
+#     idx[int(len(idx) * 0.8) :],
+# )
 
 
 adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask, _, _ = load_corpus(DATASETPATH)
@@ -161,7 +165,9 @@ def update_feature():
 
 print(f"Loading best gcn model from {GCNPATH} saved on {datetime.datetime.fromtimestamp(GCNPATH.stat().st_ctime)}")
 gcn.load_state_dict(torch.load(GCNPATH, map_location="cpu"))
-update_feature()
+
+if not args.debug:
+    update_feature()
 
 
 def zero_masker(node_mask, node_ids):
@@ -169,17 +175,18 @@ def zero_masker(node_mask, node_ids):
 
 
 def shap_forward(node_mask, graph, target_id2, doc_feats):
-    graph = graph.to(device)
-    doc_feats = [doc_feats.detach().cpu().numpy() * m[:, None] for m in node_mask]
-    doc_feats = [torch.tensor(x) for x in doc_feats]
-    doc_feats = torch.cat(doc_feats).to(device)
-    outputs = gcn.explain_forward(doc_feats, graph, target_id2, doc_mask)
-    return torch.softmax(outputs, dim=-1).detach().cpu().numpy()
+    with torch.no_grad():
+        graph = graph.to(device)
+        doc_feats = [doc_feats.detach().cpu().numpy() * m[:, None] for m in node_mask]
+        doc_feats = [torch.tensor(x) for x in doc_feats]
+        doc_feats = torch.cat(doc_feats).to(device)
+        outputs = gcn.explain_forward(doc_feats, graph, target_id2, doc_mask, args.interpret_mode)
+        return torch.softmax(outputs, dim=-1).detach().cpu().numpy()
 
 
 def ig_forward(doc_feats, graph, target_id2):
     graph = graph.to(device)
-    return gcn.explain_forward(doc_feats, graph, target_id2, doc_mask)
+    return gcn.explain_forward(doc_feats, graph, target_id2, doc_mask, args.interpret_mode)
 
 
 doc_feats = graph.ndata["cls_feats"][doc_mask].requires_grad_().to(device)
@@ -187,11 +194,13 @@ node_ids = np.array([np.arange(doc_feats.size(0))], dtype=str)
 
 
 ig_attr_dict = defaultdict(lambda: defaultdict(list))
+ig_attr_list = list()
 shap_value_dict = defaultdict(lambda: defaultdict(list))
+shap_value_list = list()
 
 for target_id1 in range(test_mask.sum()):
-    print(target_id1)
     target_id2 = test_mask.nonzero()[0][target_id1]
+    print(target_id1, target_id2, test_idx[target_id1])
 
     target_label = graph.ndata["label"][target_id2].item()
     target_cls = dataset.LE.classes_[target_label]
@@ -210,25 +219,34 @@ for target_id1 in range(test_mask.sum()):
 
     shap_values = shap_explainer(node_ids)
 
-    ig_attr_dict[str(target_id2)]["label"] = dataset.LE.classes_[target_label]
-    shap_value_dict[str(target_id2)]["label"] = dataset.LE.classes_[target_label]
+    # ig_attr_dict[str(target_id2)]["label"] = dataset.LE.classes_[target_label]
+    # shap_value_dict[str(target_id2)]["label"] = dataset.LE.classes_[target_label]
 
-    for id1 in np.argpartition(ig_attr, -10)[-10:][::-1]:
-        id2 = doc_mask.nonzero()[0][id1]
-        label = graph.ndata["label"][id2].item()
-        tgt_cls = dataset.LE.classes_[label]
-        ig_attr_dict[str(target_id2)]["rel_doc_ids"].append(int(id2))
-        ig_attr_dict[str(target_id2)]["rel_doc_labels"].append(tgt_cls)
+    ig_attr_list.append(ig_attr)
+    shap_value_list.append(shap_values[0, :, target_label].values)
 
-    for id1 in np.argpartition(shap_values[0, :, target_label].values, -10)[-10:][::-1]:
-        id2 = doc_mask.nonzero()[0][id1]
-        label = graph.ndata["label"][id2].item()
-        tgt_cls = dataset.LE.classes_[label]
-        shap_value_dict[str(target_id2)]["rel_doc_ids"].append(int(id2))
-        shap_value_dict[str(target_id2)]["rel_doc_labels"].append(tgt_cls)
+    # for id1 in np.argpartition(ig_attr, -10)[-10:][::-1]:
+    #     id2 = doc_mask.nonzero()[0][id1]
+    #     label = graph.ndata["label"][id2].item()
+    #     tgt_cls = dataset.LE.classes_[label]
+    #     ig_attr_dict[str(target_id2)]["rel_doc_ids"].append(int(id2))
+    #     ig_attr_dict[str(target_id2)]["rel_doc_labels"].append(tgt_cls)
 
-with open(IGFILE, "w") as f:
-    json.dump(ig_attr_dict, f, indent=2)
+    # for id1 in np.argpartition(shap_values[0, :, target_label].values, -10)[-10:][::-1]:
+    #     id2 = doc_mask.nonzero()[0][id1]
+    #     label = graph.ndata["label"][id2].item()
+    #     tgt_cls = dataset.LE.classes_[label]
+    #     shap_value_dict[str(target_id2)]["rel_doc_ids"].append(int(id2))
+    #     shap_value_dict[str(target_id2)]["rel_doc_labels"].append(tgt_cls)
 
-with open(SHAPFILE, "w") as f:
-    json.dump(shap_value_dict, f, indent=2)
+# with open(IGFILE, "w") as f:
+#     json.dump(ig_attr_dict, f, indent=2)
+
+# with open(SHAPFILE, "w") as f:
+#     json.dump(shap_value_dict, f, indent=2)
+
+with open(IGFILE, "wb") as f:
+    pickle.dump(ig_attr_list, f)
+
+with open(SHAPFILE, "wb") as f:
+    pickle.dump(shap_value_list, f)

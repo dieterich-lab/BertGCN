@@ -56,21 +56,45 @@ class BertGCN(th.nn.Module):
         # pred = cls_logit + gcn_logit
         return pred
 
-    # def explain_forward(self, graph, target_id2, mask):
-    def explain_forward(self, doc_feats, graph, target_id2, doc_mask):
+    def explain_forward(self, doc_feats, graph, target_id2, doc_mask, interpret_mode):
+        # doc_feats: batch_size x #documents embeddings of documents, with zeroed out embeddings for inactive documents
+        # doc_mask: boolean mask to filter only documents from graph.ndata["cls_feats"]
+        # graph: graph
+        # target_id2: true id for the test_document, i.e. test_label = graph.ndata["label"][target_id2]
+
         batch_size = int(len(doc_feats) / doc_mask.sum())
 
         cls_feats = graph.ndata["cls_feats"]
 
         gcn_logits = list()
+        logits = list()
         doc_feats = doc_feats.view(batch_size, doc_mask.sum(), -1)
+
+        if interpret_mode == "gcn_bert":
+            cls_logit = self.classifier(cls_feats[0])
+            # we detach the results to follow gradients back only to the GCN
+            cls_pred = th.nn.Softmax(dim=-1)(cls_logit).detach()
+
         for i in range(batch_size):
+
             cls_feats_ = cls_feats.clone()
             cls_feats_[doc_mask] = doc_feats[i]
             gcn_logit = self.gcn(cls_feats_, graph, graph.edata["edge_weight"])[target_id2]
-            gcn_logits.append(gcn_logit)
+            if interpret_mode == "gcn_only":
+                gcn_logits.append(gcn_logit)
+            elif interpret_mode == "gcn_bert":
+                gcn_pred = th.nn.Softmax(dim=-1)(gcn_logit)
+                pred = (gcn_pred + 1e-10) * self.mix_factor + cls_pred * (1 - self.mix_factor)
+                logit = th.log(pred)
+                logits.append(logit)
 
-        pred = torch.stack(gcn_logits)
+
+        if interpret_mode == "gcn_only":
+            pred = torch.stack(gcn_logits)
+        elif interpret_mode == "gcn_bert":
+            pred = torch.stack(logits)
+        else:
+            raise Exception("Interpret mode must be set.")
         return pred
 
 
