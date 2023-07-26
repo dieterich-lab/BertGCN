@@ -1,4 +1,5 @@
 import datetime
+from copy import deepcopy
 import os
 import pickle
 import random
@@ -19,6 +20,11 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from clinic_datasets import CleanClinicDataset
 from metrics import SklearnClassificationReport
 
+from params import parse_args
+from utils import *
+
+args = parse_args()
+
 MODELPATH = "deepset/gbert-base"
 LEARNINGRATE = 5e-5
 NEPOCHS = 50
@@ -32,55 +38,85 @@ torch.manual_seed(0)
 tokenizer = AutoTokenizer.from_pretrained(MODELPATH)
 SAVENAME = Path(MODELPATH).stem
 
-dataset_file = Path("data") / "medindcls_bert.json"
-if not dataset_file.exists():
-    print("Creating dataset")
-    dataset = CleanClinicDataset(tokenizer=tokenizer, clean=False)
-    with open(dataset_file, "wb") as f:
-        print(f"Saving dataset under {dataset_file}")
-        pickle.dump(dataset, f)
-else:
-    print(f"Loading dataset from: {dataset_file}")
-    with open(dataset_file, "rb") as f:
-        dataset = pickle.load(f)
+if args.data == "MIC":
+    dataset_file = Path("data") / "medindcls_bert.json"
+    if not dataset_file.exists():
+        print("Creating dataset")
+        dataset = CleanClinicDataset(tokenizer=tokenizer, task="MIC", clean=False)
+        with open(dataset_file, "wb") as f:
+            print(f"Saving dataset under {dataset_file}")
+            pickle.dump(dataset, f)
+    else:
+        print(f"Loading dataset from: {dataset_file}")
+        with open(dataset_file, "rb") as f:
+            dataset = pickle.load(f)
+elif args.data == "CSC":
+    train_dataset_file = Path("data") / "csc_train_bert.json"
+    test_dataset_file = Path("data") / "csc_test_bert.json"
+
+    if not train_dataset_file.exists():
+        print("Creating train dataset")
+        train_dataset = CleanClinicDataset(tokenizer=tokenizer, task="CSC", clean=False, mode="train")
+        with open(train_dataset_file, "wb") as f:
+            print(f"Saving dataset under {train_dataset_file}")
+            pickle.dump(train_dataset, f)
+    else:
+        print(f"Loading train dataset from: {train_dataset_file}")
+        with open(train_dataset_file, "rb") as f:
+            train_dataset = pickle.load(f)
+    if not test_dataset_file.exists():
+        print("Creating test dataset")
+        test_dataset = CleanClinicDataset(tokenizer=tokenizer, task="CSC", clean=False, mode="test")
+        with open(test_dataset_file, "wb") as f:
+            print(f"Saving dataset under {test_dataset_file}")
+            pickle.dump(test_dataset, f)
+    else:
+        print(f"Loading test dataset from: {test_dataset_file}")
+        with open(test_dataset_file, "rb") as f:
+            test_dataset = pickle.load(f)
+    dataset = train_dataset
+elif args.data == "Patho":
+    pass
+
 
 SAVEPATH = Path(f"models/finetuned/{SAVENAME}_{dataset}_best.pt")
 
 model = AutoModelForSequenceClassification.from_pretrained(MODELPATH, num_labels=len(dataset.LE.classes_))
 
-idx = np.arange(len(dataset))
-random.shuffle(idx)
-train_idx, val_idx, test_idx = (
-    idx[: int(len(idx) * 0.7)],
-    idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
-    idx[int(len(idx) * 0.8) :],
-)
-train_dataset = Subset(dataset, train_idx)
-val_dataset = Subset(dataset, val_idx)
-test_dataset = Subset(dataset, test_idx)
+
+if args.data == "MIC":
+    idx = np.arange(len(dataset))
+    random.shuffle(idx)
+    train_idx, val_idx, test_idx = (
+        idx[: int(len(idx) * 0.7)],
+        idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
+        idx[int(len(idx) * 0.8) :],
+    )
+    train_dataset = Subset(dataset, train_idx)
+    val_dataset = Subset(dataset, val_idx)
+    test_dataset = Subset(dataset, test_idx)
+elif args.data == "CSC":
+    idx = np.arange(len(train_dataset))
+    random.shuffle(idx)
+    train_idx, val_idx = idx[: int(len(idx) * 0.9)], idx[int(len(idx) * 0.9) :]
+    # _train_dataset = deepcopy(train_dataset)
+    train_dataset = Subset(dataset, train_idx)
+    val_dataset = Subset(dataset, val_idx)
+elif args.data == "Patho":
+    pass
 
 train_loader = DataLoader(train_dataset, batch_size=BATCHSIZE, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=BATCHSIZE, shuffle=False)
 test_loader = DataLoader(test_dataset, batch_size=BATCHSIZE, shuffle=False)
 
-# print(f"First train examples (first 300 tokens): {dataset.texts[train_dataset.indices[0]][:300]}")
-# print(f"Label: {dataset.examples[train_dataset.indices[0]]['labels']}")
-# print(f"First val examples (first 300 tokens): {dataset.texts[val_dataset.indices[0]][:300]}")
-# print(f"Label: {dataset.examples[val_dataset.indices[0]]['labels']}")
-# print(f"First test examples (first 300 tokens): {dataset.texts[test_dataset.indices[0]][:300]}")
-# print(f"Label: {dataset.examples[test_dataset.indices[0]]['labels']}")
-# print(f"Len datsets: {len(train_dataset)}, {len(val_dataset)}, {len(test_dataset)}")
 print(Counter([dataset.LE.classes_[dataset.labels[x]] for x in train_dataset.indices]))
 print(Counter([dataset.LE.classes_[dataset.labels[x]] for x in val_dataset.indices]))
-print(Counter([dataset.LE.classes_[dataset.labels[x]] for x in test_dataset.indices]))
-print(
-    Counter(
-        [
-            dataset.LE.classes_[dataset.labels[x]]
-            for x in train_dataset.indices.tolist() + val_dataset.indices.tolist() + test_dataset.indices.tolist()
-        ]
-    )
-)
+if args.data == "MIC":
+    print(Counter([dataset.LE.classes_[dataset.labels[x]] for x in test_dataset.indices]))
+elif args.data == "CSC":
+    print(Counter([dataset.LE.classes_[x["labels"]] for x in test_dataset]))
+elif args.data == "Patho":
+    pass
 
 optimizer = torch.optim.AdamW(model.parameters(), LEARNINGRATE)
 criterion = torch.nn.CrossEntropyLoss()
@@ -116,6 +152,7 @@ trainer = Engine(train_step)
 
 def eval_step(engine, batch):
     global model
+    model = model.to(torch.device("cuda:0"))
     with torch.no_grad():
         model.eval()
         x, y = batch["input_ids"], batch["labels"]
@@ -171,7 +208,7 @@ def log_validation_results(trainer):
                 "optimizer": optimizer.state_dict(),
                 "epoch": trainer.state.epoch,
             },
-            os.path.join(f"models/finetuned/{SAVENAME}_{dataset}_best.pt"),
+            os.path.join(SAVEPATH),
         )
         log_validation_results.best_val_acc = metrics["accuracy"]
 
@@ -188,7 +225,10 @@ def log_validation_results(trainer):
 
 
 log_validation_results.best_val_acc = 0
-trainer.run(train_loader, max_epochs=NEPOCHS)
+
+if not args.testonly:
+    trainer.run(train_loader, max_epochs=NEPOCHS)
+
 print(f"Loading best gcn model from {SAVEPATH} saved on {datetime.datetime.fromtimestamp(SAVEPATH.stat().st_ctime)}")
 ckpt = torch.load(SAVEPATH)
 model.bert.load_state_dict(ckpt["bert_model"])

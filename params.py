@@ -10,6 +10,10 @@ def check_positive(value):
 
 def parse_args(*args):
     parser = argparse.ArgumentParser()
+    parser.add_argument("data", type=str, choices=["MIC", "CSC", "Patho"], help="`MIC` = Medication indication classification, `CSC` = Cardio:DE section classification, `Patho` = Aurélie's data.")
+    parser.add_argument(
+        "--testonly", action="store_true", help="If true, only tests the model and skips training."
+    )
     parser.add_argument("--interpret_mode", type=str, default="gcn_only", choices=["gcn_only", "gcn_bert"])
     parser.add_argument("--attention_window", type=int, default=512, help="Attention window")
     parser.add_argument("--gpus", "-g", type=int, nargs="+", default=[0], choices=[0, 1, 2, 3])
@@ -27,7 +31,7 @@ def parse_args(*args):
         action="store_true",
         help="If false, don't use stop words to filter the dataset for the BERT model during training.",
     )
-    parser.add_argument("--debug", action="store_true", help="If true, updating graph features is supressed.")
+    parser.add_argument("--suppressupdates", action="store_true", help="If true, updating graph features is suppressed.")
     parser.add_argument("--report", action="store_true", help="Report dataset statistics.")
     parser.add_argument("--optimize", action="store_true", help="Use optuna library to grid search the best mixfactor.")
     parser.add_argument("--reportraw", action="store_true", help="Report raw (untokenized) dataset statistics.")
