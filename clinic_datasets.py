@@ -13,11 +13,12 @@ class CleanClinicDataset(Dataset):
 	def __init__(
 		self,
 		tokenizer,
-		# file_path="/prj/doctoral_letters/MIEdeep/corpus/annotated_gold500/med_indication_all_RF_diag.csv",
 		task,
+		doclevel,
 		mode=None,
 		dev=False,
 		clean=True,
+		noarznei=False
 	):
 		if task == "MIC":
 			self.file_path = "/prj/doctoral_letters/MIEdeep/corpus/annotated_gold500/med_indication_all_RF_diag.csv"
@@ -30,11 +31,13 @@ class CleanClinicDataset(Dataset):
 			pass
 
 		self.LE = LabelEncoder()
+		self.arzneiLE = LabelEncoder()
 		self.OHE = OneHotEncoder()
 		if task == "MIC":
 			lines = open(self.file_path, "r").readlines()
 			self.texts, self.labels, diagnoses, anamneses, risk_factors = list(), list(), list(), list(), list()
 			self.label2id = dict()
+			self.arznei = list()
 			enum = 0
 			for i, line in enumerate(lines):
 				(
@@ -50,7 +53,17 @@ class CleanClinicDataset(Dataset):
 				if not medication_name in self.label2id:
 					self.label2id[medication_name] = enum
 					enum += 1
-				text_list = f"Arznei {medication_name} & {discharge_letter.strip()}".split()
+				arznei = "" if noarznei else f"Arznei {medication_name} & "
+				self.arznei.append(medication_name)
+				if doclevel=="letter":
+					text_list = f"{arznei}{discharge_letter.strip()}".split()
+				elif doclevel=="diagnosis":
+					text_list = f"{arznei}{diagnosis.strip()}".split()
+				elif doclevel=="riskfactor":
+					text_list = f"{arznei}{risk_factor.strip()}".split()
+				elif doclevel=="anamnesis":
+					text_list = f"{arznei}{anamnesis.strip()}".split()
+
 				if clean:
 					self.texts.append(" ".join(x for x in text_list if x.lower() not in stop_words))
 				else:
@@ -63,14 +76,16 @@ class CleanClinicDataset(Dataset):
 					break
 
 			self.labels = np.array(self.LE.fit_transform(self.labels))
+			self.arznei = np.array(self.arzneiLE.fit_transform(self.arznei))
 			self.ohe_labels = self.OHE.fit_transform(np.array(self.labels).reshape(-1, 1))
 
 			batch_encoding = tokenizer(
 				self.texts, add_special_tokens=True, truncation=True, is_split_into_words=False, padding="max_length"
 			)
 			self.examples = [{"input_ids": np.array(e)} for e in batch_encoding["input_ids"]]
-			for l, e in zip(self.labels, self.examples):
+			for l, e, a in zip(self.labels, self.examples, self.arznei):
 				e.update({"labels": l})
+				e.update({"arznei": a})
 		elif task == "CSC":
 			self.texts, self.labels = list(), list()
 			files = glob.glob(str(Path(self.file_path) / "*"))
@@ -105,8 +120,9 @@ class CleanClinicDataset(Dataset):
 				padding="max_length"
 			)
 			self.examples = [{"input_ids": np.array(e)} for e in batch_encoding["input_ids"]]
-			for l, e in zip(self.labels, self.examples):
+			for l, e, a in zip(self.labels, self.examples, self.arznei):
 				e.update({"labels": l})
+				e.update({"arznei": a})
 			
 			self.texts = [" ".join(x) for x in self.texts]
 

@@ -62,7 +62,8 @@ class BertGCN(th.nn.Module):
         # graph: graph
         # target_id2: true id for the test_document, i.e. test_label = graph.ndata["label"][target_id2]
 
-        batch_size = int(len(doc_feats) / doc_mask.sum())
+        batch_size = doc_feats.size(0)
+        # batch_size = int(len(doc_feats) / doc_mask.sum())
 
         cls_feats = graph.ndata["cls_feats"]
 
@@ -76,7 +77,6 @@ class BertGCN(th.nn.Module):
             cls_pred = th.nn.Softmax(dim=-1)(cls_logit).detach()
 
         for i in range(batch_size):
-
             cls_feats_ = cls_feats.clone()
             cls_feats_[doc_mask] = doc_feats[i]
             gcn_logit = self.gcn(cls_feats_, graph, graph.edata["edge_weight"])[target_id2]
@@ -88,13 +88,10 @@ class BertGCN(th.nn.Module):
                 logit = th.log(pred)
                 logits.append(logit)
 
-
         if interpret_mode == "gcn_only":
             pred = torch.stack(gcn_logits)
         elif interpret_mode == "gcn_bert":
             pred = torch.stack(logits)
-        else:
-            raise Exception("Interpret mode must be set.")
         return pred
 
 
