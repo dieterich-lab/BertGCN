@@ -154,7 +154,7 @@ def load_corpus(dataset_str):
 
     features = sp.vstack((allx, vx, tx)).tolil()
     labels = np.vstack((ally, vy, ty))
-    print(len(labels))
+    # print(len(labels))
 
     # if dataset_str != "med_indication_all_RF_diag":
     # 	train_idx_orig = parse_index_file("data/{}.train.index".format(dataset_str))

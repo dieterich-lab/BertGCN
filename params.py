@@ -14,7 +14,9 @@ def parse_args(*args):
     parser.add_argument(
         "--testonly", action="store_true", help="If true, only tests the model and skips training."
     )
-    parser.add_argument("--interpret_mode", type=str, default="gcn_only", choices=["gcn_only", "gcn_bert"])
+    parser.add_argument("--interpret_mode", type=str, default="gcn_bert", choices=["gcn_only", "gcn_bert"])
+    parser.add_argument("--bertmodel", type=str, default=None, choices=["gbert", "medbert"])
+    parser.add_argument("--doclevel", type=str, default="letter", choices=["letter", "diagnosis", "riskfactor", "anamnesis"])
     parser.add_argument("--attention_window", type=int, default=512, help="Attention window")
     parser.add_argument("--gpus", "-g", type=int, nargs="+", default=[0], choices=[0, 1, 2, 3])
     parser.add_argument("--batchsize", default=1, type=int)

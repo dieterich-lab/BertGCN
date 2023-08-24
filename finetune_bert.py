@@ -1,9 +1,8 @@
 import datetime
-from copy import deepcopy
-import os
 import pickle
 import random
 from collections import Counter
+import os
 from pathlib import Path
 
 import numpy as np
@@ -22,10 +21,10 @@ from metrics import SklearnClassificationReport
 
 from params import parse_args
 from utils import *
+from entry import *
 
 args = parse_args()
 
-MODELPATH = "deepset/gbert-base"
 LEARNINGRATE = 5e-5
 NEPOCHS = 50
 BATCHSIZE = 8
@@ -35,14 +34,13 @@ random.seed(0)
 np.random.seed(0)
 torch.manual_seed(0)
 
-tokenizer = AutoTokenizer.from_pretrained(MODELPATH)
-SAVENAME = Path(MODELPATH).stem
+tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
 
 if args.data == "MIC":
-    dataset_file = Path("data") / "medindcls_bert.json"
+    dataset_file = Path("data") / f"medindcls_{args.bertmodel}_{args.doclevel}.json"
     if not dataset_file.exists():
         print("Creating dataset")
-        dataset = CleanClinicDataset(tokenizer=tokenizer, task="MIC", clean=False)
+        dataset = CleanClinicDataset(tokenizer=tokenizer, task="MIC", doclevel=args.doclevel, clean=False)
         with open(dataset_file, "wb") as f:
             print(f"Saving dataset under {dataset_file}")
             pickle.dump(dataset, f)
@@ -75,13 +73,18 @@ elif args.data == "CSC":
         with open(test_dataset_file, "rb") as f:
             test_dataset = pickle.load(f)
     dataset = train_dataset
-elif args.data == "Patho":
-    pass
 
+SAVENAME = Path(PRETRAINEDMODEL).stem
+if args.data == "MIC":
+    SAVEDIR = Path(f"models/finetuned/{args.doclevel}")
+    os.makedirs(SAVEDIR, exist_ok=True)
+    SAVEPATH = Path(f"{SAVEDIR}/{SAVENAME}_{dataset}_best.pt")
+elif args.data == "CSC":
+    SAVEDIR = Path(f"models/finetuned")
+    os.makedirs(SAVEDIR, exist_ok=True)
+    SAVEPATH = Path(f"{SAVEDIR}/{SAVENAME}_{dataset}_best.pt")
 
-SAVEPATH = Path(f"models/finetuned/{SAVENAME}_{dataset}_best.pt")
-
-model = AutoModelForSequenceClassification.from_pretrained(MODELPATH, num_labels=len(dataset.LE.classes_))
+model = AutoModelForSequenceClassification.from_pretrained(PRETRAINEDMODEL, num_labels=len(dataset.LE.classes_))
 
 
 if args.data == "MIC":
@@ -99,7 +102,6 @@ elif args.data == "CSC":
     idx = np.arange(len(train_dataset))
     random.shuffle(idx)
     train_idx, val_idx = idx[: int(len(idx) * 0.9)], idx[int(len(idx) * 0.9) :]
-    # _train_dataset = deepcopy(train_dataset)
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
 elif args.data == "Patho":
@@ -115,8 +117,10 @@ if args.data == "MIC":
     print(Counter([dataset.LE.classes_[dataset.labels[x]] for x in test_dataset.indices]))
 elif args.data == "CSC":
     print(Counter([dataset.LE.classes_[x["labels"]] for x in test_dataset]))
-elif args.data == "Patho":
-    pass
+
+print("First train set example:")
+print(f"Text: {dataset.texts[train_dataset.indices[0]]}")
+print(f"Label: {dataset.examples[train_dataset.indices[0]]['labels']}")
 
 optimizer = torch.optim.AdamW(model.parameters(), LEARNINGRATE)
 criterion = torch.nn.CrossEntropyLoss()
@@ -169,7 +173,7 @@ metrics = {
     "accuracy": Accuracy(),
     "nll": Loss(criterion),
     "cr": SklearnClassificationReport(
-        target_names=[dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels)[val_idx])]
+        target_names=[dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels))]
     ),
 }
 
@@ -207,8 +211,9 @@ def log_validation_results(trainer):
                 "classifier": model.classifier.state_dict(),
                 "optimizer": optimizer.state_dict(),
                 "epoch": trainer.state.epoch,
+                "config": model.config
             },
-            os.path.join(SAVEPATH),
+            SAVEPATH,
         )
         log_validation_results.best_val_acc = metrics["accuracy"]
 

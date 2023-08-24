@@ -13,8 +13,8 @@ class CleanClinicDataset(Dataset):
 	def __init__(
 		self,
 		tokenizer,
-		# file_path="/prj/doctoral_letters/MIEdeep/corpus/annotated_gold500/med_indication_all_RF_diag.csv",
 		task,
+		doclevel,
 		mode=None,
 		dev=False,
 		clean=True,
@@ -50,7 +50,15 @@ class CleanClinicDataset(Dataset):
 				if not medication_name in self.label2id:
 					self.label2id[medication_name] = enum
 					enum += 1
-				text_list = f"Arznei {medication_name} & {discharge_letter.strip()}".split()
+				if doclevel=="letter":
+					text_list = f"Arznei {medication_name} & {discharge_letter.strip()}".split()
+				elif doclevel=="diagnosis":
+					text_list = f"Arznei {medication_name} & {diagnosis.strip()}".split()
+				elif doclevel=="riskfactor":
+					text_list = f"Arznei {medication_name} & {risk_factor.strip()}".split()
+				elif doclevel=="anamnesis":
+					text_list = f"Arznei {medication_name} & {anamnesis.strip()}".split()
+
 				if clean:
 					self.texts.append(" ".join(x for x in text_list if x.lower() not in stop_words))
 				else:

@@ -15,6 +15,7 @@ from clinic_datasets import CleanClinicDataset
 
 from params import parse_args
 from utils import *
+from entry import *
 
 args = parse_args()
 
@@ -23,7 +24,6 @@ np.random.seed(0)
 
 logging.basicConfig(
 	format=f"%(asctime)s - %(message)s",
-	# format=f"%(asctime)s ({args.mixfactor}) - %(message)s",
 	datefmt="%Y-%m-%d %H:%M:%S",
 	level=logging.INFO,
 	handlers=[
@@ -31,16 +31,18 @@ logging.basicConfig(
 	],
 )
 
-MODELPATH = "deepset/gbert-base"
 EMBEDDIM = 768
+DATANAME = f"medindcls_{args.doclevel}" if args.data == "MIC" else "csc"
+# DATANAME = f"medindcls_{args.bertmodel}_{args.doclevel}" if args.data == "MIC" else "csc"
 
-tokenizer = AutoTokenizer.from_pretrained(MODELPATH)
+tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
 
 if args.data == "MIC":
-    dataset_file = Path("data") / "medindcls_bert_clean.json"
+    dataset_file = Path("data") / f"medindcls_gbert_{args.doclevel}_clean.json"
+    # dataset_file = Path("data") / f"medindcls_gbert_{args.doclevel}_clean.json"
     if not dataset_file.exists():
         logging.info("Creating dataset")
-        dataset = CleanClinicDataset(tokenizer=tokenizer, task="MIC", clean=True)
+        dataset = CleanClinicDataset(tokenizer=tokenizer, task="MIC", doclevel=args.doclevel, clean=True)
         with open(dataset_file, "wb") as f:
             logging.info(f"Saving dataset under {dataset_file}")
             pickle.dump(dataset, f)
@@ -49,8 +51,8 @@ if args.data == "MIC":
         with open(dataset_file, "rb") as f:
             dataset = pickle.load(f)
 elif args.data == "CSC":
-    train_dataset_file = Path("data") / "csc_train_bert_clean.json"
-    test_dataset_file = Path("data") / "csc_test_bert_clean.json"
+    train_dataset_file = Path("data") / f"{DATANAME}_train_bert_clean.json"
+    test_dataset_file = Path("data") / f"{DATANAME}_test_bert_clean.json"
 
     if not train_dataset_file.exists():
         logging.info("Creating train dataset")
@@ -73,8 +75,6 @@ elif args.data == "CSC":
         with open(test_dataset_file, "rb") as f:
             test_dataset = pickle.load(f)
     dataset = train_dataset
-elif args.data == "Patho":
-    pass
 
 if args.data == "MIC":
     idx = np.arange(len(dataset))
@@ -93,8 +93,6 @@ elif args.data == "CSC":
     train_idx, val_idx = idx[: int(len(idx) * 0.9)], idx[int(len(idx) * 0.9) :]
     train_dataset = Subset(dataset, train_idx)
     val_dataset = Subset(dataset, val_idx)
-elif args.data == "Patho":
-    pass
 
 
 # if args.data == "MIC":
@@ -106,7 +104,7 @@ elif args.data == "Patho":
 #     mask = mask != 1
 #     examples[mask] = tokenizer.pad_token_id
 
-logging.info("Len datasets:", len(train_dataset), len(val_dataset), len(test_dataset))
+logging.info(f"Len datasets: {len(train_dataset)}, {len(val_dataset)}, {len(test_dataset)}")
 
 # build vocab
 logging.info("Build vocab")
@@ -114,18 +112,15 @@ if args.data == "MIC":
     word_counter = Counter([word for sents in dataset.texts for word in sents.split()])
 elif args.data == "CSC":
     word_counter = Counter([word for sents in dataset.texts for word in sents.split()] + [word for sents in test_dataset.texts for word in sents.split()])
-elif args.data == "Patho":
-    pass
 
 vocab = list(word_counter.keys())
+print("\n".join(vocab), file=open(Path("data") / f"{DATANAME}_vocab.txt", "w"))
 vocab_size = len(vocab)
 
 if args.data == "MIC":
     words_per_text_lists = [words.split() for words in dataset.texts]
 elif args.data == "CSC":
     words_per_text_lists = [words.split() for words in dataset.texts] + [words.split() for words in test_dataset.texts]
-elif args.data == "Patho":
-    pass
 
 words_per_text_sets = [set(x) for x in words_per_text_lists]
 
@@ -162,7 +157,7 @@ elif args.data == "Patho":
 allx = csr_matrix((train_size + vocab_size, EMBEDDIM), dtype=np.float)
 ally = np.concatenate((y.toarray(), np.zeros((vocab_size, len(label_list)))))
 
-logging.info(x.shape, y.shape, tx.shape, ty.shape, allx.shape, ally.shape, vx.shape, vy.shape)
+logging.info((x.shape, y.shape, tx.shape, ty.shape, allx.shape, ally.shape, vx.shape, vy.shape))
 
 window_size = 20
 windows = []
@@ -171,10 +166,7 @@ logging.info("Getting windows")
 for doc_words in dataset.texts:
     words = doc_words.split()
     length = len(words)
-    # if length <= window_size:
     windows.append(words[:window_size])
-    # else:
-    # for j in range(length - window_size + 1):
     for j in range(1, length - window_size + 1):
         window = words[j : j + window_size]
         windows.append(window)
@@ -316,7 +308,6 @@ if args.data == "MIC":
             doc_word_set.add(word)
 elif args.data == "CSC":
     for c, doc_words in enumerate(test_dataset.texts):
-        # doc_words = dataset.texts[i]
         words = doc_words.split()
         doc_word_set = set()
         for word in words:
@@ -344,38 +335,67 @@ adj = csr_matrix((weight, (row, col)), shape=(node_size, node_size))
 
 # dump objects
 logging.info("Dumping objects")
-f = open("data/ind.{}.x".format(dataset), "wb")
+if args.data=="MIC":
+    f = open(f"data/ind.{dataset}_{args.doclevel}.x", "wb")
+    # f = open(f"data/ind.{dataset}_{args.bertmodel}_{args.doclevel}.x", "wb")
+else:
+    f = open("data/ind.{}.x".format(dataset), "wb")
 pkl.dump(x, f)
 f.close()
 
-f = open("data/ind.{}.y".format(dataset), "wb")
+if args.data=="MIC":
+    f = open(f"data/ind.{dataset}_{args.doclevel}.y", "wb")
+else:
+    f = open("data/ind.{}.y".format(dataset), "wb")
 pkl.dump(y, f)
 f.close()
 
-f = open("data/ind.{}.tx".format(dataset), "wb")
+if args.data=="MIC":
+    f = open(f"data/ind.{dataset}_{args.doclevel}.tx", "wb")
+else:
+    f = open("data/ind.{}.tx".format(dataset), "wb")
 pkl.dump(tx, f)
 f.close()
 
-f = open("data/ind.{}.ty".format(dataset), "wb")
+if args.data=="MIC":
+    f = open(f"data/ind.{dataset}_{args.doclevel}.ty", "wb")
+else:
+    f = open("data/ind.{}.ty".format(dataset), "wb")
 pkl.dump(ty, f)
 f.close()
 
-f = open("data/ind.{}.allx".format(dataset), "wb")
+if args.data=="MIC":
+    f = open(f"data/ind.{dataset}_{args.doclevel}.allx", "wb")
+else:
+    f = open("data/ind.{}.allx".format(dataset), "wb")
 pkl.dump(allx, f)
 f.close()
 
-f = open("data/ind.{}.ally".format(dataset), "wb")
+if args.data=="MIC":
+    f = open(f"data/ind.{dataset}_{args.doclevel}.ally", "wb")
+else:
+    f = open("data/ind.{}.ally".format(dataset), "wb")
 pkl.dump(ally, f)
 f.close()
 
-f = open("data/ind.{}.adj".format(dataset), "wb")
+if args.data=="MIC":
+    f = open(f"data/ind.{dataset}_{args.doclevel}.adj", "wb")
+else:
+    f = open("data/ind.{}.adj".format(dataset), "wb")
 pkl.dump(adj, f)
 f.close()
 
-f = open("data/ind.{}.vx".format(dataset), "wb")
+if args.data=="MIC":
+    f = open(f"data/ind.{dataset}_{args.doclevel}.vx", "wb")
+else:
+    f = open("data/ind.{}.vx".format(dataset), "wb")
 pkl.dump(vx, f)
 f.close()
 
-f = open("data/ind.{}.vy".format(dataset), "wb")
+if args.data=="MIC":
+    f = open(f"data/ind.{dataset}_{args.doclevel}.vy", "wb")
+else:
+    f = open("data/ind.{}.vy".format(dataset), "wb")
 pkl.dump(vy, f)
 f.close()
+
