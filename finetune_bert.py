@@ -22,6 +22,7 @@ from metrics import SklearnClassificationReport
 from params import parse_args
 from utils import *
 from entry import *
+from entry import *
 
 args = parse_args()
 
@@ -34,6 +35,7 @@ random.seed(0)
 np.random.seed(0)
 torch.manual_seed(0)
 
+tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
 tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
 
 if args.data == "MIC":
@@ -100,6 +102,7 @@ elif args.data == "CSC":
     SAVEPATH = Path(f"{SAVEDIR}/{SAVENAME}_{dataset}_best.pt")
 
 model = AutoModelForSequenceClassification.from_pretrained(PRETRAINEDMODEL, num_labels=len(dataset.LE.classes_))
+model = AutoModelForSequenceClassification.from_pretrained(PRETRAINEDMODEL, num_labels=len(dataset.LE.classes_))
 
 
 if args.data == "MIC":
@@ -149,6 +152,10 @@ if args.data == "MIC":
     print(Counter([dataset.LE.classes_[dataset.labels[x]] for x in test_dataset.indices]))
 elif args.data == "CSC":
     print(Counter([dataset.LE.classes_[x["labels"]] for x in test_dataset]))
+
+print("First train set example:")
+print(f"Text: {dataset.texts[train_dataset.indices[0]]}")
+print(f"Label: {dataset.examples[train_dataset.indices[0]]['labels']}")
 
 print("First train set example:")
 print(f"Text: {dataset.texts[train_dataset.indices[0]]}")
@@ -206,6 +213,7 @@ metrics = {
     "nll": Loss(criterion),
     "cr": SklearnClassificationReport(
         target_names=[dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels))]
+        target_names=[dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels))]
     ),
 }
 
@@ -244,7 +252,9 @@ def log_validation_results(trainer):
                 "optimizer": optimizer.state_dict(),
                 "epoch": trainer.state.epoch,
                 "config": model.config
+                "config": model.config
             },
+            SAVEPATH,
             SAVEPATH,
         )
         log_validation_results.best_val_acc = metrics["accuracy"]

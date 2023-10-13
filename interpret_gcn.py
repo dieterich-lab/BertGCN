@@ -1,29 +1,24 @@
 import datetime
 import json
+import logging
 import pickle
 import random
+from collections import defaultdict
+from functools import partial
 from pathlib import Path
 
+import dgl
 import numpy as np
+import shap
 import torch
+import torch.utils.data as Data
+from captum.attr import IntegratedGradients
 from torch.utils.data import Subset
 from transformers import AutoTokenizer
 
 from clinic_datasets import CleanClinicDataset
-from utils import *
+from entry import *
 from model import BertGCN
-import torch.utils.data as Data
-import dgl
-
-import logging
-
-import shap
-
-import dgl
-import torch
-from captum.attr import IntegratedGradients
-from functools import partial
-from collections import defaultdict
 from params import parse_args
 from entry import *
 
@@ -151,6 +146,7 @@ nb_word = nb_node - nb_train - nb_val - nb_test
 nb_class = y_train.shape[1]
 
 model = BertGCN(
+model = BertGCN(
     nb_class=nb_class,
     pretrained_model=PRETRAINEDMODEL,
     mix_factor=args.mixfactor,
@@ -159,6 +155,8 @@ model = BertGCN(
     dropout=0.5,
 )
 
+model = model.to(device)
+model = model.eval()
 model = model.to(device)
 model = model.eval()
 
@@ -218,13 +216,16 @@ graph.ndata["cls_feats"] = torch.zeros((nb_node, model.feat_dim))
 
 def update_feature():
     global graph, model
+    global graph, model
     dataloader = Data.DataLoader(Data.TensorDataset(graph.ndata["input_ids"][doc_mask]), batch_size=64)
     with torch.no_grad():
         model.eval()
         cls_list = []
         logging.info("Udating features...")
+        logging.info("Udating features...")
         for batch in dataloader:
             input_ids = [x.to(device) for x in batch][0]
+            output = model.bert_model(input_ids=input_ids)[0][:, 0]
             output = model.bert_model(input_ids=input_ids)[0][:, 0]
             cls_list.append(output.cpu())
         cls_feat = torch.cat(cls_list, axis=0)
@@ -249,11 +250,13 @@ def shap_forward(node_mask, graph, target_id2, doc_feats):
         doc_feats = [torch.tensor(x) for x in doc_feats]
         doc_feats = torch.cat(doc_feats).to(device)
         outputs = model.explain_forward(doc_feats, graph, target_id2, doc_mask, args.interpret_mode)
+        outputs = model.explain_forward(doc_feats, graph, target_id2, doc_mask, args.interpret_mode)
         return torch.softmax(outputs, dim=-1).detach().cpu().numpy()
 
 
 def ig_forward(doc_feats, graph, target_id2):
     graph = graph.to(device)
+    return model.explain_forward(doc_feats, graph, target_id2, doc_mask, args.interpret_mode)
     return model.explain_forward(doc_feats, graph, target_id2, doc_mask, args.interpret_mode)
 
 
@@ -268,13 +271,17 @@ shap_value_list = list()
 
 logging.info(f"Test data size: {test_mask.sum()}")
 # for target_id1 in range(test_mask.sum())[:1]:
+logging.info(f"Test data size: {test_mask.sum()}")
+# for target_id1 in range(test_mask.sum())[:1]:
 for target_id1 in range(test_mask.sum()):
     target_id2 = test_mask.nonzero()[0][target_id1]
+    logging.info((target_id1, target_id2))
     logging.info((target_id1, target_id2))
 
     target_label = graph.ndata["label"][target_id2].item()
     target_cls = dataset.LE.classes_[target_label]
 
+    logging.info("Computing IG attributions ...")
     logging.info("Computing IG attributions ...")
     ig_explainer = IntegratedGradients(partial(ig_forward, graph=graph, target_id2=target_id2))
     ig_attr, delta = ig_explainer.attribute(

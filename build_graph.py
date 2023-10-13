@@ -1,5 +1,5 @@
-import pickle
 import logging
+import pickle
 import pickle as pkl
 import random
 from collections import Counter, defaultdict
@@ -12,10 +12,9 @@ from torch.utils.data import Subset
 from transformers import AutoTokenizer
 
 from clinic_datasets import CleanClinicDataset
-
+from entry import *
 from params import parse_args
 from utils import *
-from entry import *
 
 args = parse_args()
 
@@ -23,12 +22,12 @@ random.seed(0)
 np.random.seed(0)
 
 logging.basicConfig(
-	format=f"%(asctime)s - %(message)s",
-	datefmt="%Y-%m-%d %H:%M:%S",
-	level=logging.INFO,
-	handlers=[
-		logging.StreamHandler(),
-	],
+    format=f"%(asctime)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    level=logging.INFO,
+    handlers=[
+        logging.StreamHandler(),
+    ],
 )
 
 EMBEDDIM = 768
@@ -119,7 +118,10 @@ logging.info("Build vocab")
 if args.data == "MIC":
     word_counter = Counter([word for sents in dataset.texts for word in sents.split()])
 elif args.data == "CSC":
-    word_counter = Counter([word for sents in dataset.texts for word in sents.split()] + [word for sents in test_dataset.texts for word in sents.split()])
+    word_counter = Counter(
+        [word for sents in dataset.texts for word in sents.split()]
+        + [word for sents in test_dataset.texts for word in sents.split()]
+    )
 
 vocab = list(word_counter.keys())
 print("\n".join(vocab), file=open(Path("data") / f"{DATANAME}_vocab.txt", "w"))
@@ -165,6 +167,7 @@ elif args.data == "Patho":
 allx = csr_matrix((train_size + vocab_size, EMBEDDIM), dtype=np.float)
 ally = np.concatenate((y.toarray(), np.zeros((vocab_size, len(label_list)))))
 
+logging.info((x.shape, y.shape, tx.shape, ty.shape, allx.shape, ally.shape, vx.shape, vy.shape))
 logging.info((x.shape, y.shape, tx.shape, ty.shape, allx.shape, ally.shape, vx.shape, vy.shape))
 
 window_size = 20
@@ -343,7 +346,7 @@ adj = csr_matrix((weight, (row, col)), shape=(node_size, node_size))
 
 # dump objects
 logging.info("Dumping objects")
-if args.data=="MIC":
+if args.data == "MIC":
     if args.testunklar:
         f = open(f"data/ind.{dataset}_{args.doclevel}_testunklar.x", "wb")
     else:
@@ -353,7 +356,7 @@ else:
 pkl.dump(x, f)
 f.close()
 
-if args.data=="MIC":
+if args.data == "MIC":
     if args.testunklar:
         f = open(f"data/ind.{dataset}_{args.doclevel}_testunklar.y", "wb")
     else:
@@ -363,7 +366,7 @@ else:
 pkl.dump(y, f)
 f.close()
 
-if args.data=="MIC":
+if args.data == "MIC":
     if args.testunklar:
         f = open(f"data/ind.{dataset}_{args.doclevel}_testunklar.tx", "wb")
     else:
@@ -373,7 +376,7 @@ else:
 pkl.dump(tx, f)
 f.close()
 
-if args.data=="MIC":
+if args.data == "MIC":
     if args.testunklar:
         f = open(f"data/ind.{dataset}_{args.doclevel}_testunklar.ty", "wb")
     else:
@@ -383,7 +386,7 @@ else:
 pkl.dump(ty, f)
 f.close()
 
-if args.data=="MIC":
+if args.data == "MIC":
     if args.testunklar:
         f = open(f"data/ind.{dataset}_{args.doclevel}_testunklar.allx", "wb")
     else:
@@ -393,7 +396,7 @@ else:
 pkl.dump(allx, f)
 f.close()
 
-if args.data=="MIC":
+if args.data == "MIC":
     if args.testunklar:
         f = open(f"data/ind.{dataset}_{args.doclevel}_testunklar.ally", "wb")
     else:
@@ -403,7 +406,7 @@ else:
 pkl.dump(ally, f)
 f.close()
 
-if args.data=="MIC":
+if args.data == "MIC":
     if args.testunklar:
         f = open(f"data/ind.{dataset}_{args.doclevel}_testunklar.adj", "wb")
     else:
@@ -413,7 +416,7 @@ else:
 pkl.dump(adj, f)
 f.close()
 
-if args.data=="MIC":
+if args.data == "MIC":
     if args.testunklar:
         f = open(f"data/ind.{dataset}_{args.doclevel}_testunklar.vx", "wb")
     else:
@@ -423,7 +426,7 @@ else:
 pkl.dump(vx, f)
 f.close()
 
-if args.data=="MIC":
+if args.data == "MIC":
     if args.testunklar:
         f = open(f"data/ind.{dataset}_{args.doclevel}_testunklar.vy", "wb")
     else:
@@ -432,4 +435,3 @@ else:
     f = open("data/ind.{}.vy".format(dataset), "wb")
 pkl.dump(vy, f)
 f.close()
-

@@ -10,7 +10,7 @@ from transformers import (
     AutoModelForSequenceClassification,
     AutoModelForTokenClassification,
     LongformerForSequenceClassification,
-    LongformerForTokenClassification
+    LongformerForTokenClassification,
 )
 
 from params import parse_args
