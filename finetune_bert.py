@@ -213,7 +213,6 @@ metrics = {
     "nll": Loss(criterion),
     "cr": SklearnClassificationReport(
         target_names=[dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels))]
-        target_names=[dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels))]
     ),
 }
 
@@ -252,9 +251,7 @@ def log_validation_results(trainer):
                 "optimizer": optimizer.state_dict(),
                 "epoch": trainer.state.epoch,
                 "config": model.config
-                "config": model.config
             },
-            SAVEPATH,
             SAVEPATH,
         )
         log_validation_results.best_val_acc = metrics["accuracy"]

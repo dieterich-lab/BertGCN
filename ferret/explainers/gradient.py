@@ -96,7 +96,9 @@ class IntegratedGradientExplainer(BaseExplainer):
         attr = attr[0, :input_len, :].detach().cpu()
 
         # pool over hidden size
-        attr = attr.sum(-1).numpy()
+        attr = attr.sum(-1)
+        attr /= torch.norm(attr)
+        attr = attr.cpu().detach().numpy()
 
         # norm_attr = self._normalize_input_attributions(attr.detach())
         tokens = np.char.mod("%d", np.arange(embeds.size(1))).tolist()

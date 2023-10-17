@@ -1,5 +1,4 @@
 import datetime
-import os
 import logging
 import os
 import pickle
@@ -15,7 +14,6 @@ from ignite.handlers import Checkpoint, EarlyStopping, ModelCheckpoint
 
 # from ignite.handlers.param_scheduler import LRScheduler, create_lr_scheduler_with_warmup
 from ignite.metrics import Accuracy, ClassificationReport, Loss, Precision, Recall
-from ignite.metrics import Accuracy, ClassificationReport, Loss, Precision, Recall
 from ignite.utils import setup_logger
 from torch.optim.lr_scheduler import ExponentialLR, ReduceLROnPlateau
 from transformers import AutoTokenizer
@@ -26,7 +24,6 @@ from metrics import SklearnClassificationReport
 from model import BertGCN
 from params import parse_args
 from utils import *
-from entry import *
 
 args = parse_args()
 
@@ -43,13 +40,12 @@ ACCUSTEPS = 8
 LOGINTERVALL = 100
 
 MODELNAME = Path(PRETRAINEDMODEL).stem
-MODELNAME = Path(PRETRAINEDMODEL).stem
 if args.data == "MIC":
     DATASET = "med_indication_all_RF_diag"
     if args.testunklar:
-        DATASETPATH =  Path("data") / f"ind.{DATASET}_{args.doclevel}_testunklar"
+        DATASETPATH = Path("data") / f"ind.{DATASET}_{args.doclevel}_testunklar"
     else:
-        DATASETPATH =  Path("data") / f"ind.{DATASET}_{args.doclevel}"
+        DATASETPATH = Path("data") / f"ind.{DATASET}_{args.doclevel}"
     BERTSAVEDIR = Path(f"models/finetuned/{args.doclevel}")
     if args.testunklar:
         BERTPATH = Path(f"{BERTSAVEDIR}/{MODELNAME}_med_indication_all_RF_diag_testunklar_best.pt")
@@ -57,7 +53,7 @@ if args.data == "MIC":
         BERTPATH = Path(f"{BERTSAVEDIR}/{MODELNAME}_med_indication_all_RF_diag_best.pt")
 elif args.data == "CSC":
     DATASET = "CARDIODE400_main"
-    DATASETPATH =  Path("data") / f"ind.{DATASET}"
+    DATASETPATH = Path("data") / f"ind.{DATASET}"
     BERTPATH = Path("models/finetuned/gbert-base_CARDIODE400_main_best.pt")
 
 tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
@@ -77,17 +73,14 @@ logging.basicConfig(
 logging.info(f"{'=== Params ===':>32}")
 for k, v in vars(args).items():
     logging.info(f"{k:>25} : {str(v):<25}")
-    logging.info(f"{k:>25} : {str(v):<25}")
 
 optuna.logging.enable_propagation()
 optuna.logging.disable_default_handler()
 
 if args.data == "MIC":
     dataset_file = Path("data") / f"medindcls_{args.bertmodel}_{args.doclevel}.json"
-    dataset_file = Path("data") / f"medindcls_{args.bertmodel}_{args.doclevel}.json"
     if not dataset_file.exists():
         print("Creating dataset")
-        dataset = CleanClinicDataset(tokenizer=tokenizer, task="MIC", doclevel=args.doclevel, clean=False)
         dataset = CleanClinicDataset(tokenizer=tokenizer, task="MIC", doclevel=args.doclevel, clean=False)
         with open(dataset_file, "wb") as f:
             print(f"Saving dataset under {dataset_file}")
@@ -122,14 +115,17 @@ elif args.data == "CSC":
             test_dataset = pickle.load(f)
     dataset = train_dataset
 
+GCNNAME = f"{MODELNAME}_{dataset}.pt"
+if args.testunklar:
+    GCNNAME = f"{MODELNAME}_{dataset}_testunklar.pt"
+
 if args.data == "MIC":
-    GCNNAME = f"{MODELNAME}_{dataset}.pt"
     SAVEDIR = Path(f"models/gcn/{args.mixfactor}/{args.doclevel}")
     os.makedirs(SAVEDIR, exist_ok=True)
     GCNSAVEPATH = SAVEDIR / GCNNAME
 elif args.data == "CSC":
-    GCNNAME = f"{MODELNAME}_{dataset}.pt"
     SAVEDIR = Path(f"models/gcn/{args.mixfactor}")
+    os.makedirs(SAVEDIR, exist_ok=True)
     GCNSAVEPATH = SAVEDIR / GCNNAME
 
 if args.data == "MIC":
@@ -164,7 +160,6 @@ elif args.data == "CSC":
 
 
 def run(trial):
-
     adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask, _, _ = load_corpus(DATASETPATH)
 
     nb_node = features.shape[0]
@@ -178,34 +173,13 @@ def run(trial):
 
     model = BertGCN(
         nb_class=nb_class,
-        pretrained_model=PRETRAINEDMODEL, # parameters will be overwritten with fine-tuned weights
+        pretrained_model=PRETRAINEDMODEL,  # parameters will be overwritten with fine-tuned weights
         mix_factor=args.mixfactor if trial in ["train", "test"] else trial.suggest_uniform("mix_factor", 0, 1),
         gcn_layers=2,
         n_hidden=200,
         dropout=0.5,
     )
 
-    # if trial == "test":
-    # 	logging.info(
-    # 		f"Loading pretrained gcn model from {GCNPATH} saved on {datetime.datetime.fromtimestamp(GCNPATH.stat().st_ctime)}"
-    # 	)
-    # 	model.load_state_dict(torch.load(GCNPATH))
-    # 	# model.load_state_dict(torch.load(GCNPATH, map_location=torch.device("cpu")))
-    # else:
-    if trial == "train":
-        logging.info(
-            f"Loading pretrained BERT model from {BERTPATH} saved on {datetime.datetime.fromtimestamp(BERTPATH.stat().st_ctime)}"
-        )
-        ckpt = torch.load(BERTPATH, map_location=device)
-        model.bert_model.load_state_dict(ckpt["bert_model"])
-        model.classifier.load_state_dict(ckpt["classifier"])
-    # if trial == "test":
-    # 	logging.info(
-    # 		f"Loading pretrained gcn model from {GCNPATH} saved on {datetime.datetime.fromtimestamp(GCNPATH.stat().st_ctime)}"
-    # 	)
-    # 	model.load_state_dict(torch.load(GCNPATH))
-    # 	# model.load_state_dict(torch.load(GCNPATH, map_location=torch.device("cpu")))
-    # else:
     if trial == "train":
         logging.info(
             f"Loading pretrained BERT model from {BERTPATH} saved on {datetime.datetime.fromtimestamp(BERTPATH.stat().st_ctime)}"
@@ -218,20 +192,12 @@ def run(trial):
     y = y_train + y_test + y_val
     y_train = y_train.argmax(axis=1)
     y = y.argmax(axis=1)
-    # transform one-hot label to class ID for pytorch computation
-    y = y_train + y_test + y_val
-    y_train = y_train.argmax(axis=1)
-    y = y.argmax(axis=1)
 
-    # document mask used for update feature
-    doc_mask = train_mask + val_mask + test_mask
     # document mask used for update feature
     doc_mask = train_mask + val_mask + test_mask
 
     # tokenizer = AutoTokenizer.from_pretrained(MODELTYPE)
-    # tokenizer = AutoTokenizer.from_pretrained(MODELTYPE)
 
-    # logging.info(f"Len idx: {len(train_idx)} {len(val_idx)} {len(test_idx)}")
     # logging.info(f"Len idx: {len(train_idx)} {len(val_idx)} {len(test_idx)}")
 
     if args.data == "MIC":
@@ -252,21 +218,15 @@ def run(trial):
             ]
         )
     elif args.data == "CSC":
-            input_ids = torch.cat(
-                [
-                    torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[train_idx]])),
-                    torch.zeros((nb_word, tokenizer.model_max_length), dtype=torch.long),
-                    torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[val_idx]])),
-                    torch.tensor(np.array([x["input_ids"] for x in test_dataset.examples])),
-                ]
-            )
+        input_ids = torch.cat(
+            [
+                torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[train_idx]])),
+                torch.zeros((nb_word, tokenizer.model_max_length), dtype=torch.long),
+                torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[val_idx]])),
+                torch.tensor(np.array([x["input_ids"] for x in test_dataset.examples])),
+            ]
+        )
 
-    assert np.array_equal(y[:nb_train], dataset.labels[train_idx])
-    assert np.array_equal(y[nb_train + nb_word : nb_train + nb_word + nb_val], dataset.labels[val_idx])
-    if args.data == "MIC":
-        assert np.array_equal(y[-nb_test:], dataset.labels[test_idx])
-    if args.data == "CSC":
-        assert np.array_equal(y[-nb_test:], test_dataset.labels)
     assert np.array_equal(y[:nb_train], dataset.labels[train_idx])
     assert np.array_equal(y[nb_train + nb_word : nb_train + nb_word + nb_val], dataset.labels[val_idx])
     if args.data == "MIC":
@@ -276,23 +236,13 @@ def run(trial):
 
     # build DGL Graph
     adj_norm = normalize_adj(adj + sp.eye(adj.shape[0]))
-    # build DGL Graph
-    adj_norm = normalize_adj(adj + sp.eye(adj.shape[0]))
 
     train_idx_dataset = Data.TensorDataset(torch.arange(0, nb_train, dtype=torch.long))
     val_idx_dataset = Data.TensorDataset(
         torch.arange(nb_train + nb_word, nb_train + nb_word + nb_val, dtype=torch.long)
     )
     test_idx_dataset = Data.TensorDataset(torch.arange(nb_node - nb_test, nb_node, dtype=torch.long))
-    train_idx_dataset = Data.TensorDataset(torch.arange(0, nb_train, dtype=torch.long))
-    val_idx_dataset = Data.TensorDataset(
-        torch.arange(nb_train + nb_word, nb_train + nb_word + nb_val, dtype=torch.long)
-    )
-    test_idx_dataset = Data.TensorDataset(torch.arange(nb_node - nb_test, nb_node, dtype=torch.long))
 
-    idx_loader_train = Data.DataLoader(train_idx_dataset, batch_size=BATCHSIZE)
-    idx_loader_val = Data.DataLoader(val_idx_dataset, batch_size=BATCHSIZE)
-    idx_loader_test = Data.DataLoader(test_idx_dataset, batch_size=BATCHSIZE)
     idx_loader_train = Data.DataLoader(train_idx_dataset, batch_size=BATCHSIZE)
     idx_loader_val = Data.DataLoader(val_idx_dataset, batch_size=BATCHSIZE)
     idx_loader_test = Data.DataLoader(test_idx_dataset, batch_size=BATCHSIZE)
@@ -305,16 +255,7 @@ def run(trial):
         ],
         lr=GCNLR,
     )
-    optimizer = torch.optim.Adam(
-        [
-            {"params": model.bert_model.parameters(), "lr": BERTLR},
-            {"params": model.classifier.parameters(), "lr": BERTLR},
-            {"params": model.gcn.parameters(), "lr": GCNLR},
-        ],
-        lr=GCNLR,
-    )
 
-    criterion = torch.nn.CrossEntropyLoss()
     criterion = torch.nn.CrossEntropyLoss()
 
     graph = dgl.from_scipy(adj_norm.astype("float32"), eweight_name="edge_weight")
@@ -346,39 +287,7 @@ def run(trial):
         graph.ndata["cls_feats"].detach_()
         train_loss = loss.item()
         return train_loss
-    def train_step(engine, batch):
-        nonlocal model, graph, optimizer, criterion
-        model.train()
-        model = model.to(device)
-        graph = graph.to(device)
-        (idx,) = [x.to(device) for x in batch]
-        train_mask = graph.ndata["train"][idx].type(torch.BoolTensor)
-        y_pred = model(graph, idx)[train_mask]
-        y_true = graph.ndata["label_train"][idx][train_mask]
-        loss = criterion(y_pred, y_true)
-        loss.backward()
-        if engine.state.iteration % ACCUSTEPS == 0:
-            optimizer.step()
-            optimizer.zero_grad()
-        graph.ndata["cls_feats"].detach_()
-        train_loss = loss.item()
-        return train_loss
 
-    def update_feature():
-        nonlocal graph, model
-        dataloader = Data.DataLoader(Data.TensorDataset(graph.ndata["input_ids"][doc_mask]), batch_size=64)
-        with torch.no_grad():
-            model = model.to(device)
-            model.eval()
-            cls_list = []
-            logging.info("Updating features...")
-            for batch in dataloader:
-                input_ids = [x.to(device) for x in batch][0]
-                output = model.bert_model(input_ids=input_ids)[0][:, 0]
-                cls_list.append(output.cpu())
-            cls_feat = torch.cat(cls_list, axis=0)
-        graph = graph.to("cpu")
-        graph.ndata["cls_feats"][doc_mask] = cls_feat
     def update_feature():
         nonlocal graph, model
         dataloader = Data.DataLoader(Data.TensorDataset(graph.ndata["input_ids"][doc_mask]), batch_size=64)
@@ -397,10 +306,7 @@ def run(trial):
 
     trainer = Engine(train_step)
     trainer.logger = setup_logger("trainer", level=30)
-    trainer = Engine(train_step)
-    trainer.logger = setup_logger("trainer", level=30)
 
-    scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
     scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
 
     # torch_lr_scheduler = ExponentialLR(optimizer=optimizer, gamma=0.5)
@@ -423,10 +329,6 @@ def run(trial):
     # combined_events |= Events.EPOCH_STARTED(event_filter=lambda _, __: trainer.state.epoch > 2)
     # trainer.add_event_handler(combined_events, scheduler)
 
-    @trainer.on(Events.EPOCH_COMPLETED)
-    def reset_graph(trainer):
-        update_feature()
-        torch.cuda.empty_cache()
     @trainer.on(Events.EPOCH_COMPLETED)
     def reset_graph(trainer):
         update_feature()
@@ -495,25 +397,11 @@ def run(trial):
 
     def score_function(engine):
         return -1.0 * engine.state.metrics["nll"]
-    def score_function(engine):
-        return -1.0 * engine.state.metrics["nll"]
 
-    # val_evaluator.run(idx_loader_val)
     # val_evaluator.run(idx_loader_val)
 
     # to_save = {'model': model, 'optimizer': optimizer, 'trainer': trainer}
-    # to_save = {'model': model, 'optimizer': optimizer, 'trainer': trainer}
 
-    # checkpoint = ModelCheckpoint(
-    #     to_save,
-    #     SAVEPATH,
-    #     n_saved=1,
-    #     filename_pattern=GCNNAME,
-    #     score_function=score_function,
-    #     score_name="accuracy",
-    #     global_step_transform=lambda *_: trainer.state.epoch,
-    #     require_empty=False,
-    # )
     # checkpoint = ModelCheckpoint(
     #     to_save,
     #     SAVEPATH,
@@ -534,21 +422,9 @@ def run(trial):
         global_step_transform=lambda *_: trainer.state.epoch,
         require_empty=False,
     )
-    model_checkpoint = ModelCheckpoint(
-        SAVEDIR,
-        n_saved=1,
-        filename_pattern=GCNNAME,
-        score_function=score_function,
-        score_name="accuracy",
-        global_step_transform=lambda *_: trainer.state.epoch,
-        require_empty=False,
-    )
 
     val_evaluator.add_event_handler(Events.COMPLETED, model_checkpoint, {"model": model})
-    val_evaluator.add_event_handler(Events.COMPLETED, model_checkpoint, {"model": model})
 
-    stopping_handler = EarlyStopping(patience=args.patience, score_function=score_function, trainer=trainer)
-    val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
     stopping_handler = EarlyStopping(patience=args.patience, score_function=score_function, trainer=trainer)
     val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
 
@@ -557,19 +433,7 @@ def run(trial):
     #     logging.info(
     #         f"Epoch[{engine.state.epoch}], Iter[{engine.state.iteration}] Loss: {engine.state.output[0]:.2f} Accuracy: {engine.state.output[1]:.2f}"
     #     )
-    # @trainer.on(Events.ITERATION_COMPLETED(every=LOGINTERVALL))
-    # def log_training_loss(engine):
-    #     logging.info(
-    #         f"Epoch[{engine.state.epoch}], Iter[{engine.state.iteration}] Loss: {engine.state.output[0]:.2f} Accuracy: {engine.state.output[1]:.2f}"
-    #     )
 
-    # @trainer.on(Events.EPOCH_COMPLETED)
-    # def log_training_results(trainer):
-    #     train_evaluator.run(idx_loader_train)
-    #     metrics = train_evaluator.state.metrics
-    #     logging.info(
-    #         f"Training Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
-    #     )
     # @trainer.on(Events.EPOCH_COMPLETED)
     # def log_training_results(trainer):
     #     train_evaluator.run(idx_loader_train)
@@ -587,25 +451,8 @@ def run(trial):
             f"Validation Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
         )
         logging.info(metrics["cr"])
-    @trainer.on(Events.EPOCH_COMPLETED)
-    def log_validation_results(trainer):
-        val_evaluator.run(idx_loader_val)
-        metrics = val_evaluator.state.metrics
-        scheduler.step(metrics["nll"])
-        logging.info(
-            f"Validation Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
-        )
-        logging.info(metrics["cr"])
 
-    # @trainer.on(Events.COMPLETED)
-    # def log_test_results(trainer):
-    #     test_evaluator.run(idx_loader_test)
-    #     metrics = test_evaluator.state.metrics
-    #     logging.info(
-    #         f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
-    #     )
-    #     logging.info(metrics["cr"])
-    # @trainer.on(Events.COMPLETED)
+    # @trainer.on(Events.COMPLETEDm
     # def log_test_results(trainer):
     #     test_evaluator.run(idx_loader_test)
     #     metrics = test_evaluator.state.metrics
@@ -614,26 +461,22 @@ def run(trial):
     #     )
     #     logging.info(metrics["cr"])
 
-    if not (args.suppressupdates or trial == "test") :
+    if not (args.suppressupdates or trial == "test"):
         update_feature()
 
     if trial != "test":
         trainer.run(idx_loader_train, max_epochs=NEPOCHS)
-        if trial != "train": # optuna study object needs a return value
+        if trial != "train":  # optuna study object needs a return value
             return val_evaluator.state.metrics["f1"]
 
     logging.info(
         f"Loading best gcn model from {GCNSAVEPATH} saved on {datetime.datetime.fromtimestamp(GCNSAVEPATH.stat().st_ctime)}"
     )
     model.load_state_dict(torch.load(GCNSAVEPATH))
-    logging.info(
-        f"Loading best gcn model from {GCNSAVEPATH} saved on {datetime.datetime.fromtimestamp(GCNSAVEPATH.stat().st_ctime)}"
-    )
-    model.load_state_dict(torch.load(GCNSAVEPATH))
 
-    # checkpoint = torch.load(GCNPATH, map_location=device) 
-    # Checkpoint.load_objects(to_load=to_save, checkpoint=checkpoint) 
-    
+    # checkpoint = torch.load(GCNPATH, map_location=device)
+    # Checkpoint.load_objects(to_load=to_save, checkpoint=checkpoint)
+
     if not args.suppressupdates:
         update_feature()
     test_evaluator.run(idx_loader_test)
@@ -648,35 +491,20 @@ def run(trial):
 def optimize():
     study = optuna.create_study(direction="maximize")
     study.optimize(run, n_trials=10)
-    study = optuna.create_study(direction="maximize")
-    study.optimize(run, n_trials=10)
 
-    print("Number of finished trials: ", len(study.trials))
     print("Number of finished trials: ", len(study.trials))
 
     print("Best trial:")
     trial = study.best_trial
-    print("Best trial:")
-    trial = study.best_trial
 
     print("  Value: ", trial.value)
-    print("  Value: ", trial.value)
 
-    print("  Params: ")
-    for key, value in trial.params.items():
-        print("    {}: {}".format(key, value))
     print("  Params: ")
     for key, value in trial.params.items():
         print("    {}: {}".format(key, value))
 
 
 if args.optimize:
-    optimize()
-else:
-    if args.testonly:
-        run("test")
-    else:
-        run("train")
     optimize()
 else:
     if args.testonly:

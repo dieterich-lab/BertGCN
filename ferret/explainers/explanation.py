@@ -7,7 +7,7 @@ import numpy as np
 class Explanation:
     """Generic class to represent an Explanation"""
 
-    text: str
+    embeds: str
     tokens: str
     scores: np.array
     explainer: str

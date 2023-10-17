@@ -47,7 +47,7 @@ class AOPC_Comprehensiveness_Evaluation(BaseEvaluator):
 
         remove_first_last, only_pos, removal_args, _ = parse_evaluator_args(evaluation_args)
 
-        embeds = explanation.text
+        embeds = explanation.embeds
         score_explanation = explanation.scores
         _, logits = self.helper._forward(embeds=embeds, output_hidden_states=False)
         baseline = logits.softmax(-1)[0, target].item()
@@ -148,7 +148,7 @@ class AOPC_Sufficiency_Evaluation(BaseEvaluator):
 
         remove_first_last, only_pos, removal_args, _ = parse_evaluator_args(evaluation_args)
 
-        embeds = explanation.text
+        embeds = explanation.embeds
         score_explanation = explanation.scores
 
         _, logits = self.helper._forward(embeds, output_hidden_states=False)
@@ -299,7 +299,7 @@ class TauLOO_Evaluation(BaseEvaluator):
 
         remove_first_last = evaluation_args.get("remove_first_last", True)
 
-        text = explanation.text
+        embeds = explanation.embeds
         score_explanation = explanation.scores
 
         if remove_first_last:
@@ -307,7 +307,7 @@ class TauLOO_Evaluation(BaseEvaluator):
                 score_explanation = score_explanation[1:-1]
 
         loo_scores = (
-            self.compute_leave_one_out_occlusion(text, target=target, remove_first_last=remove_first_last).numpy() * -1
+            self.compute_leave_one_out_occlusion(embeds, target=target, remove_first_last=remove_first_last).numpy() * -1
         )
 
         kendalltau_score = kendalltau(loo_scores, score_explanation)[0]

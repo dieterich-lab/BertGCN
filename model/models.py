@@ -63,7 +63,12 @@ class BertGCN(th.nn.Module):
         # target_id2: true id for the test_document, i.e. test_label = graph.ndata["label"][target_id2]
 
         batch_size = doc_feats.size(0)
-        # batch_size = int(len(doc_feats) / doc_mask.sum())
+        
+        # Depending on if we come from ferret or directly from shap/captum:
+        if len(doc_feats.shape) == 2:
+            batch_size = int(len(doc_feats) / doc_mask.sum())
+        else:
+            batch_size = doc_feats.size(0)
 
         cls_feats = graph.ndata["cls_feats"]
 

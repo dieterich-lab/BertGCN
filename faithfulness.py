@@ -98,11 +98,9 @@ GCNNAME = f"{MODELNAME}_{dataset}.pt"
 SAVEDIR = Path(f"models/gcn/{args.mixfactor}/{args.doclevel}")
 GCNPATH = SAVEDIR / GCNNAME
 
-IGFILE = SAVEDIR / f"ig_attrs_gcn_{MODELNAME}_{args.data}"
-SHAPFILE = SAVEDIR / f"shap_values_gcn_{MODELNAME}_{args.data}"
+IGFILE = SAVEDIR / f"ig_eval_gcn_{MODELNAME}_{args.data}"
 if args.testunklar:
-    IGFILE = SAVEDIR / f"ig_attrs_gcn_{MODELNAME}_{args.data}_testunklar"
-    SHAPFILE = SAVEDIR / f"shap_values_gcn_{MODELNAME}_{args.data}_testunklar"
+    IGFILE = SAVEDIR / f"ig_eval_gcn_{MODELNAME}_{args.data}_testunklar"
 
 if args.data == "MIC":
     if not args.testunklar:
@@ -259,21 +257,24 @@ doc_feats = graph.ndata["cls_feats"][doc_mask].requires_grad_().to(device)
 node_ids = np.array([np.arange(doc_feats.size(0))], dtype=str)
 
 
-ig_attr_dict = defaultdict(lambda: defaultdict(list))
-ig_attr_list = list()
-shap_value_dict = defaultdict(lambda: defaultdict(list))
-shap_value_list = list()
+eval_list = list()
 
 logging.info(f"Test data size: {test_mask.sum()}")
-for target_id1 in range(test_mask.sum())[:1]:
-    # for target_id1 in range(test_mask.sum()):
+# for target_id1 in range(test_mask.sum())[:1]:
+for target_id1 in range(test_mask.sum()):
     target_id2 = test_mask.nonzero()[0][target_id1]
+    logging.info((target_id1, target_id2))
     logging.info((target_id1, target_id2))
 
     target_label = graph.ndata["label"][target_id2].item()
     target_cls = dataset.LE.classes_[target_label]
     explainers = [IntegratedGradientExplainer(partial(ig_forward, graph=graph, target_id2=target_id2), tokenizer)]
     bench = Benchmark(partial(ig_forward, graph=graph, target_id2=target_id2), tokenizer, explainers=explainers)
-    explanations = bench.explain(doc_feats.unsqueeze(0), target=target_label, normalize_scores=False)
+    explanations = bench.explain(doc_feats.unsqueeze(0), target=target_label, normalize_scores=True)
     evaluations = bench.evaluate_explanations(explanations, target=target_label)
-    # explanations = bench.explain(doc_feats, target=target_label, normalize_scores=False)
+
+    eval_list.append(evaluations)
+
+logging.info("Saving Evaluations")
+with open(f"{IGFILE}.json", "wb") as f:
+    pickle.dump(eval_list, f)
