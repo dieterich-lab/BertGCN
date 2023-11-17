@@ -1,4 +1,5 @@
 import datetime
+import logging
 import pickle
 import random
 from collections import Counter
@@ -10,8 +11,8 @@ import torch
 from ignite.engine import Engine, Events
 from ignite.handlers import EarlyStopping
 from ignite.handlers.param_scheduler import create_lr_scheduler_with_warmup
-from ignite.metrics import Accuracy, Loss
-from ignite.utils import convert_tensor
+from ignite.metrics import Accuracy, ClassificationReport, Loss, Precision, Recall
+from ignite.utils import convert_tensor, setup_logger
 from torch.optim.lr_scheduler import ExponentialLR, ReduceLROnPlateau
 from torch.utils.data import DataLoader, Subset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -35,7 +36,23 @@ random.seed(0)
 np.random.seed(0)
 torch.manual_seed(0)
 
-tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
+now = datetime.datetime.now()
+now_str = now.strftime("%Y-%m-%d_%H:%M")
+
+LOGPATH = Path("logs") / "finetune" / args.data
+os.makedirs(LOGPATH, exist_ok=True)
+
+handlers = [
+    logging.FileHandler(LOGPATH / f"{now_str}.log", mode="w"),
+    logging.StreamHandler(),
+]
+
+logging.basicConfig(
+    format=f"%(asctime)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    level=logging.INFO,
+    handlers=handlers,
+)
 tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
 
 if args.data == "MIC":
@@ -44,44 +61,37 @@ if args.data == "MIC":
     else:
         dataset_file = Path("data") / f"medindcls_{args.bertmodel}_{args.doclevel}.json"
     if not dataset_file.exists():
-        print("Creating dataset")
+        logging.info("Creating dataset")
         dataset = CleanClinicDataset(tokenizer=tokenizer, task="MIC", doclevel=args.doclevel, clean=False, noarznei=args.noarznei)
         with open(dataset_file, "wb") as f:
-            print(f"Saving dataset under {dataset_file}")
+            logging.info(f"Saving dataset under {dataset_file}")
             pickle.dump(dataset, f)
     else:
-        print(f"Loading dataset from: {dataset_file}")
+        logging.info(f"Loading dataset from: {dataset_file}")
         with open(dataset_file, "rb") as f:
             dataset = pickle.load(f)
 elif args.data == "CSC":
-    if args.noarznei:
-        train_dataset_file = Path("data") / "csc_train_bert.json"
-        test_dataset_file = Path("data") / "csc_test_bert.json"
-        if args.noarznei:
-            dataset_file = Path("data") / f"csc_train_{args.bertmodel}_{args.doclevel}_noarznei.json"
-            dataset_file = Path("data") / f"csc_test_{args.bertmodel}_{args.doclevel}_noarznei.json"
-        else:
-            train_dataset_file = Path("data") / f"csc_train_{args.bertmodel}_{args.doclevel}.json"
-            test_dataset_file = Path("data") / f"csc_test_{args.bertmodel}_{args.doclevel}.json"
+    train_dataset_file = Path("data") / f"csc_train_{args.bertmodel}_{args.doclevel}.json"
+    test_dataset_file = Path("data") / f"csc_test_{args.bertmodel}_{args.doclevel}.json"
 
     if not train_dataset_file.exists():
-        print("Creating train dataset")
+        logging.info("Creating train dataset")
         train_dataset = CleanClinicDataset(tokenizer=tokenizer, task="CSC", clean=False, mode="train")
         with open(train_dataset_file, "wb") as f:
-            print(f"Saving dataset under {train_dataset_file}")
+            logging.info(f"Saving dataset under {train_dataset_file}")
             pickle.dump(train_dataset, f)
     else:
-        print(f"Loading train dataset from: {train_dataset_file}")
+        logging.info(f"Loading train dataset from: {train_dataset_file}")
         with open(train_dataset_file, "rb") as f:
             train_dataset = pickle.load(f)
     if not test_dataset_file.exists():
-        print("Creating test dataset")
+        logging.info("Creating test dataset")
         test_dataset = CleanClinicDataset(tokenizer=tokenizer, task="CSC", clean=False, mode="test")
         with open(test_dataset_file, "wb") as f:
-            print(f"Saving dataset under {test_dataset_file}")
+            logging.info(f"Saving dataset under {test_dataset_file}")
             pickle.dump(test_dataset, f)
     else:
-        print(f"Loading test dataset from: {test_dataset_file}")
+        logging.info(f"Loading test dataset from: {test_dataset_file}")
         with open(test_dataset_file, "rb") as f:
             test_dataset = pickle.load(f)
     dataset = train_dataset
@@ -102,21 +112,33 @@ elif args.data == "CSC":
     SAVEPATH = Path(f"{SAVEDIR}/{SAVENAME}_{dataset}_best.pt")
 
 model = AutoModelForSequenceClassification.from_pretrained(PRETRAINEDMODEL, num_labels=len(dataset.LE.classes_))
-model = AutoModelForSequenceClassification.from_pretrained(PRETRAINEDMODEL, num_labels=len(dataset.LE.classes_))
-
 
 if args.data == "MIC":
     if not args.testunklar:
-        idx = np.arange(len(dataset))
-        random.shuffle(idx)
-        train_idx, val_idx, test_idx = (
-            idx[: int(len(idx) * 0.7)],
-            idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
-            idx[int(len(idx) * 0.8) :],
-        )
-        train_dataset = Subset(dataset, train_idx)
-        val_dataset = Subset(dataset, val_idx)
-        test_dataset = Subset(dataset, test_idx)
+        if not args.cv:
+            idx = np.arange(len(dataset))
+            random.shuffle(idx)
+            train_idx, val_idx, test_idx = (
+                idx[: int(len(idx) * 0.7)],
+                idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
+                idx[int(len(idx) * 0.8) :],
+            )
+            train_dataset = Subset(dataset, train_idx)
+            val_dataset = Subset(dataset, val_idx)
+            test_dataset = Subset(dataset, test_idx)
+        else:
+            train_datasets, val_datasets, test_datasets = list(), list(), list()
+            for i in range(10):
+                idx = np.arange(len(dataset))
+                random.shuffle(idx)
+                train_idx, val_idx, test_idx = (
+                    idx[: int(len(idx) * 0.7)],
+                    idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
+                    idx[int(len(idx) * 0.8) :],
+                )
+                train_datasets.append(Subset(dataset, train_idx))
+                val_datasets.append(Subset(dataset, val_idx))
+                test_datasets.append(Subset(dataset, test_idx))
     else:
         _train_idx, test_idx = list(), list()
         for i, x in enumerate(dataset):
@@ -142,24 +164,31 @@ elif args.data == "CSC":
 elif args.data == "Patho":
     pass
 
-train_loader = DataLoader(train_dataset, batch_size=BATCHSIZE, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=BATCHSIZE, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=BATCHSIZE, shuffle=False)
+if not args.cv:
+    train_loader = DataLoader(train_dataset, batch_size=BATCHSIZE, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCHSIZE, shuffle=False)
+    test_loader = DataLoader(test_dataset, batch_size=BATCHSIZE, shuffle=False)
+else:
+    train_loaders, val_loaders, test_loaders = list(), list(), list()
+    for i in range(10):
+        train_loaders.append(DataLoader(train_datasets[i], batch_size=BATCHSIZE, shuffle=True))
+        val_loaders.append(DataLoader(val_datasets[i], batch_size=BATCHSIZE, shuffle=False))
+        test_loaders.append(DataLoader(test_datasets[i], batch_size=BATCHSIZE, shuffle=False))
 
-print(Counter([dataset.LE.classes_[dataset.labels[x]] for x in train_dataset.indices]))
-print(Counter([dataset.LE.classes_[dataset.labels[x]] for x in val_dataset.indices]))
-if args.data == "MIC":
-    print(Counter([dataset.LE.classes_[dataset.labels[x]] for x in test_dataset.indices]))
-elif args.data == "CSC":
-    print(Counter([dataset.LE.classes_[x["labels"]] for x in test_dataset]))
+# print(Counter([dataset.LE.classes_[dataset.labels[x]] for x in train_dataset.indices]))
+# print(Counter([dataset.LE.classes_[dataset.labels[x]] for x in val_dataset.indices]))
+# if args.data == "MIC":
+#     print(Counter([dataset.LE.classes_[dataset.labels[x]] for x in test_dataset.indices]))
+# elif args.data == "CSC":
+#     print(Counter([dataset.LE.classes_[x["labels"]] for x in test_dataset]))
 
-print("First train set example:")
-print(f"Text: {dataset.texts[train_dataset.indices[0]]}")
-print(f"Label: {dataset.examples[train_dataset.indices[0]]['labels']}")
+# print("First train set example:")
+# print(f"Text: {dataset.texts[train_dataset.indices[0]]}")
+# print(f"Label: {dataset.examples[train_dataset.indices[0]]['labels']}")
 
-print("First train set example:")
-print(f"Text: {dataset.texts[train_dataset.indices[0]]}")
-print(f"Label: {dataset.examples[train_dataset.indices[0]]['labels']}")
+# print("First train set example:")
+# print(f"Text: {dataset.texts[train_dataset.indices[0]]}")
+# print(f"Label: {dataset.examples[train_dataset.indices[0]]['labels']}")
 
 optimizer = torch.optim.AdamW(model.parameters(), LEARNINGRATE)
 criterion = torch.nn.CrossEntropyLoss()
@@ -181,8 +210,9 @@ def train_step(engine, batch):
 
 
 trainer = Engine(train_step)
+trainer.logger = setup_logger("trainer", level=30)
 
-# scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
+scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
 
 # torch_lr_scheduler = ExponentialLR(optimizer=optimizer, gamma=0.5)
 # scheduler = create_lr_scheduler_with_warmup(
@@ -204,12 +234,16 @@ def eval_step(engine, batch):
         return y_pred, y
 
 
-train_evaluator = Engine(eval_step)
 val_evaluator = Engine(eval_step)
 test_evaluator = Engine(eval_step)
 
+precision = Precision(average=False)
+recall = Recall(average=False)
+F1 = (precision * recall * 2 / (precision + recall)).mean()
+
 metrics = {
     "accuracy": Accuracy(),
+    "f1": F1,
     "nll": Loss(criterion),
     "cr": SklearnClassificationReport(
         target_names=[dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels))]
@@ -217,14 +251,10 @@ metrics = {
 }
 
 for n, f in metrics.items():
-    f.attach(train_evaluator, n)
-
-for n, f in metrics.items():
     f.attach(val_evaluator, n)
 
 for n, f in metrics.items():
     f.attach(test_evaluator, n)
-
 
 def score_function(engine):
     return -1.0 * engine.state.metrics["nll"]
@@ -232,29 +262,6 @@ def score_function(engine):
 
 stopping_handler = EarlyStopping(patience=3, score_function=score_function, trainer=trainer)
 val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
-
-
-@trainer.on(Events.EPOCH_COMPLETED)
-def log_validation_results(trainer):
-    val_evaluator.run(val_loader)
-    metrics = val_evaluator.state.metrics
-    # scheduler.step(metrics["nll"])
-    print(
-        f"Validation Results - Epoch: {trainer.state.epoch}  Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
-    )
-    if metrics["accuracy"] > log_validation_results.best_val_acc:
-        print("New checkpoint")
-        torch.save(
-            {
-                "bert_model": model.bert.state_dict(),
-                "classifier": model.classifier.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "epoch": trainer.state.epoch,
-                "config": model.config
-            },
-            SAVEPATH,
-        )
-        log_validation_results.best_val_acc = metrics["accuracy"]
 
 
 # @trainer.on(Events.COMPLETED)
@@ -268,18 +275,88 @@ def log_validation_results(trainer):
 #     print(metrics["cr"])
 
 
-log_validation_results.best_val_acc = 0
 
-if not args.testonly:
-    trainer.run(train_loader, max_epochs=NEPOCHS)
+if not args.cv:
 
-print(f"Loading best gcn model from {SAVEPATH} saved on {datetime.datetime.fromtimestamp(SAVEPATH.stat().st_ctime)}")
-ckpt = torch.load(SAVEPATH)
-model.bert.load_state_dict(ckpt["bert_model"])
-model.classifier.load_state_dict(ckpt["classifier"])
-test_evaluator.run(test_loader)
-metrics = test_evaluator.state.metrics
-print(
-    f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
-)
-print(metrics["cr"])
+    @trainer.on(Events.EPOCH_COMPLETED)
+    def log_validation_results(trainer):
+        val_evaluator.run(val_loader)
+        metrics = val_evaluator.state.metrics
+        logging.info(
+            f"Validation Results - Epoch: {trainer.state.epoch}  Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
+        )
+        if metrics["accuracy"] > log_validation_results.best_val_acc:
+            torch.save(
+                {
+                    "bert_model": model.bert.state_dict(),
+                    "classifier": model.classifier.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "epoch": trainer.state.epoch,
+                    "config": model.config
+                },
+                SAVEPATH,
+            )
+            log_validation_results.best_val_acc = metrics["accuracy"]
+        scheduler.step(metrics["nll"])
+
+    log_validation_results.best_val_acc = 0
+
+    if not args.testonly:
+        trainer.run(train_loader, max_epochs=NEPOCHS)
+
+    logging.info(f"Loading best BERT model from {SAVEPATH} saved on {datetime.datetime.fromtimestamp(SAVEPATH.stat().st_ctime)}")
+    ckpt = torch.load(SAVEPATH)
+    model.bert.load_state_dict(ckpt["bert_model"])
+    model.classifier.load_state_dict(ckpt["classifier"])
+    test_evaluator.run(test_loader)
+    metrics = test_evaluator.state.metrics
+    logging.info(
+        f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
+    )
+    logging.info(metrics["cr"])
+else:
+    f1s, accs = list(), list()
+    for i in range(10):
+        logging.info(f"Training split {i}...")
+
+        SAVEPATH = Path(f"{SAVEDIR}/{i}/{SAVENAME}_{dataset}_best.pt")
+        os.makedirs(Path(f"{SAVEDIR}/{i}"), exist_ok=True)
+
+        @trainer.on(Events.EPOCH_COMPLETED)
+        def log_validation_results(trainer):
+            val_evaluator.run(val_loaders[i])
+            metrics = val_evaluator.state.metrics
+            logging.info(
+                f"Validation Results - Epoch: {trainer.state.epoch}  Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
+            )
+            if metrics["accuracy"] > log_validation_results.best_val_acc:
+                torch.save(
+                    {
+                        "bert_model": model.bert.state_dict(),
+                        "classifier": model.classifier.state_dict(),
+                        "optimizer": optimizer.state_dict(),
+                        "epoch": trainer.state.epoch,
+                        "config": model.config
+                    },
+                    SAVEPATH,
+                )
+                log_validation_results.best_val_acc = metrics["accuracy"]
+            scheduler.step(metrics["nll"])
+
+        log_validation_results.best_val_acc = 0
+
+        trainer.run(train_loaders[i], max_epochs=NEPOCHS)
+        logging.info(f"Loading best BERT model from {SAVEPATH} saved on {datetime.datetime.fromtimestamp(SAVEPATH.stat().st_ctime)}")
+        ckpt = torch.load(SAVEPATH)
+        model.bert.load_state_dict(ckpt["bert_model"])
+        model.classifier.load_state_dict(ckpt["classifier"])
+        test_evaluator.run(test_loaders[i])
+        metrics = test_evaluator.state.metrics
+        logging.info(
+            f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
+        )
+        f1, acc = metrics["f1"], metrics["accuracy"]
+        f1s.append(f1)
+        accs.append(acc)
+        logging.info(f"Mean F1 scores: {np.mean(f1s)}, Std: {np.std(f1s)}")
+        logging.info(f"Mean accuracies: {np.mean(accs)}, Std: {np.std(accs)}")

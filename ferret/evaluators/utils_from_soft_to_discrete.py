@@ -1,5 +1,6 @@
-import numpy as np
 from functools import partial
+
+import numpy as np
 
 
 def _get_id_tokens_greater_th(soft_score_explanation, th, only_pos=None):
@@ -7,28 +8,9 @@ def _get_id_tokens_greater_th(soft_score_explanation, th, only_pos=None):
     return id_top
 
 
-def _get_id_tokens_top_k(soft_score_explanation, k, only_pos=True, fx=None, baseline=None):
+def _get_id_tokens_top_k(soft_score_explanation, k, only_pos=True):
     if only_pos:
-        if fx is None:
-            dir = -1
-        else:
-            if fx < baseline:
-                dir = 1
-            else:
-                dir = -1
-        if dir == 1:
-            id_top_k = [
-                i
-                for i in np.array(soft_score_explanation).argsort()[:k]
-                # for i in np.array(soft_score_explanation).argsort()[-k:][::-1]
-                if (soft_score_explanation[i] < 0)
-            ]
-        else:
-            id_top_k = [
-                i
-                for i in np.array(soft_score_explanation).argsort()[-k:][::-1]
-                if (soft_score_explanation[i] > 0 )
-            ]
+        id_top_k = [i for i in np.array(soft_score_explanation).argsort()[-k:][::-1] if soft_score_explanation[i] > 0]
     else:
         id_top_k = np.array(soft_score_explanation).argsort()[-k:][::-1]
     # None if we take no token
@@ -37,17 +19,16 @@ def _get_id_tokens_top_k(soft_score_explanation, k, only_pos=True, fx=None, base
     return id_top_k
 
 
-def _get_id_tokens_percentage(soft_score_explanation, percentage, only_pos=True, fx=None, baseline=None):
+def _get_id_tokens_percentage(soft_score_explanation, percentage, only_pos=True):
     v = int(percentage * len(soft_score_explanation))
     # Only if we remove at least instance. TBD
     if v > 0 and v <= len(soft_score_explanation):
-        return _get_id_tokens_top_k(soft_score_explanation, v, only_pos=only_pos, fx=fx, baseline=baseline)
+        return _get_id_tokens_top_k(soft_score_explanation, v, only_pos=only_pos)
     else:
         return None
 
 
 def get_discrete_explanation_topK(score_explanation, topK, only_pos=False):
-
     # Indexes in the top k. If only pos is true, we only consider scores>0
     topk_indices = _get_id_tokens_top_k(score_explanation, topK, only_pos=only_pos)
 

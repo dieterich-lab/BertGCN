@@ -14,6 +14,7 @@ from ignite.handlers import Checkpoint, EarlyStopping, ModelCheckpoint
 
 # from ignite.handlers.param_scheduler import LRScheduler, create_lr_scheduler_with_warmup
 from ignite.metrics import Accuracy, ClassificationReport, Loss, Precision, Recall
+from ignite.metrics.confusion_matrix import ConfusionMatrix
 from ignite.utils import setup_logger
 from torch.optim.lr_scheduler import ExponentialLR, ReduceLROnPlateau
 from transformers import AutoTokenizer
@@ -48,7 +49,9 @@ if args.data == "MIC":
         DATASETPATH = Path("data") / f"ind.{DATASET}_{args.doclevel}"
     BERTSAVEDIR = Path(f"models/finetuned/{args.doclevel}")
     if args.testunklar:
-        BERTPATH = Path(f"{BERTSAVEDIR}/{MODELNAME}_med_indication_all_RF_diag_testunklar_best.pt")
+        BERTPATH = Path(
+            f"{BERTSAVEDIR}/{MODELNAME}_med_indication_all_RF_diag_testunklar_best.pt"
+        )
     else:
         BERTPATH = Path(f"{BERTSAVEDIR}/{MODELNAME}_med_indication_all_RF_diag_best.pt")
 elif args.data == "CSC":
@@ -60,14 +63,22 @@ tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+now = datetime.datetime.now()
+now_str = now.strftime("%Y-%m-%d_%H:%M")
+
+LOGPATH = Path("logs") / "gcn" / args.data
+os.makedirs(LOGPATH, exist_ok=True)
+
+handlers = [
+    logging.FileHandler(LOGPATH / f"{now_str}.log", mode="w"),
+    logging.StreamHandler(),
+]
 
 logging.basicConfig(
     format=f"%(asctime)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     level=logging.INFO,
-    handlers=[
-        logging.StreamHandler(),
-    ],
+    handlers=handlers,
 )
 
 logging.info(f"{'=== Params ===':>32}")
@@ -81,7 +92,9 @@ if args.data == "MIC":
     dataset_file = Path("data") / f"medindcls_{args.bertmodel}_{args.doclevel}.json"
     if not dataset_file.exists():
         print("Creating dataset")
-        dataset = CleanClinicDataset(tokenizer=tokenizer, task="MIC", doclevel=args.doclevel, clean=False)
+        dataset = CleanClinicDataset(
+            tokenizer=tokenizer, task="MIC", doclevel=args.doclevel, clean=False
+        )
         with open(dataset_file, "wb") as f:
             print(f"Saving dataset under {dataset_file}")
             pickle.dump(dataset, f)
@@ -95,7 +108,9 @@ elif args.data == "CSC":
 
     if not train_dataset_file.exists():
         print("Creating train dataset")
-        train_dataset = CleanClinicDataset(tokenizer=tokenizer, task="CSC", clean=False, mode="train")
+        train_dataset = CleanClinicDataset(
+            tokenizer=tokenizer, task="CSC", clean=False, mode="train"
+        )
         with open(train_dataset_file, "wb") as f:
             print(f"Saving dataset under {train_dataset_file}")
             pickle.dump(train_dataset, f)
@@ -105,7 +120,9 @@ elif args.data == "CSC":
             train_dataset = pickle.load(f)
     if not test_dataset_file.exists():
         print("Creating test dataset")
-        test_dataset = CleanClinicDataset(tokenizer=tokenizer, task="CSC", clean=False, mode="test")
+        test_dataset = CleanClinicDataset(
+            tokenizer=tokenizer, task="CSC", clean=False, mode="test"
+        )
         with open(test_dataset_file, "wb") as f:
             print(f"Saving dataset under {test_dataset_file}")
             pickle.dump(test_dataset, f)
@@ -160,7 +177,18 @@ elif args.data == "CSC":
 
 
 def run(trial):
-    adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask, _, _ = load_corpus(DATASETPATH)
+    (
+        adj,
+        features,
+        y_train,
+        y_val,
+        y_test,
+        train_mask,
+        val_mask,
+        test_mask,
+        _,
+        _,
+    ) = load_corpus(DATASETPATH)
 
     nb_node = features.shape[0]
     nb_train, nb_val, nb_test = train_mask.sum(), val_mask.sum(), test_mask.sum()
@@ -174,7 +202,9 @@ def run(trial):
     model = BertGCN(
         nb_class=nb_class,
         pretrained_model=PRETRAINEDMODEL,  # parameters will be overwritten with fine-tuned weights
-        mix_factor=args.mixfactor if trial in ["train", "test"] else trial.suggest_uniform("mix_factor", 0, 1),
+        mix_factor=args.mixfactor,
+        # if trial in ["train", "test"]
+        # else trial.suggest_uniform("mix_factor", 0, 1),
         gcn_layers=2,
         n_hidden=200,
         dropout=0.5,
@@ -203,32 +233,60 @@ def run(trial):
     if args.data == "MIC":
         input_ids = torch.cat(
             [
-                torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[train_idx]])),
+                torch.tensor(
+                    np.array(
+                        [x["input_ids"] for x in np.array(dataset.examples)[train_idx]]
+                    )
+                ),
                 torch.zeros((nb_word, tokenizer.model_max_length), dtype=torch.long),
-                torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[val_idx]])),
-                torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[test_idx]])),
+                torch.tensor(
+                    np.array(
+                        [x["input_ids"] for x in np.array(dataset.examples)[val_idx]]
+                    )
+                ),
+                torch.tensor(
+                    np.array(
+                        [x["input_ids"] for x in np.array(dataset.examples)[test_idx]]
+                    )
+                ),
             ]
         )
         arznei = torch.cat(
             [
-                torch.tensor([x["arznei"] for x in np.array(dataset.examples)[train_idx]]),
+                torch.tensor(
+                    [x["arznei"] for x in np.array(dataset.examples)[train_idx]]
+                ),
                 torch.zeros((nb_word), dtype=torch.long),
-                torch.tensor([x["arznei"] for x in np.array(dataset.examples)[val_idx]]),
-                torch.tensor([x["arznei"] for x in np.array(dataset.examples)[test_idx]]),
+                torch.tensor(
+                    [x["arznei"] for x in np.array(dataset.examples)[val_idx]]
+                ),
+                torch.tensor(
+                    [x["arznei"] for x in np.array(dataset.examples)[test_idx]]
+                ),
             ]
         )
     elif args.data == "CSC":
         input_ids = torch.cat(
             [
-                torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[train_idx]])),
+                torch.tensor(
+                    np.array(
+                        [x["input_ids"] for x in np.array(dataset.examples)[train_idx]]
+                    )
+                ),
                 torch.zeros((nb_word, tokenizer.model_max_length), dtype=torch.long),
-                torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[val_idx]])),
+                torch.tensor(
+                    np.array(
+                        [x["input_ids"] for x in np.array(dataset.examples)[val_idx]]
+                    )
+                ),
                 torch.tensor(np.array([x["input_ids"] for x in test_dataset.examples])),
             ]
         )
 
     assert np.array_equal(y[:nb_train], dataset.labels[train_idx])
-    assert np.array_equal(y[nb_train + nb_word : nb_train + nb_word + nb_val], dataset.labels[val_idx])
+    assert np.array_equal(
+        y[nb_train + nb_word : nb_train + nb_word + nb_val], dataset.labels[val_idx]
+    )
     if args.data == "MIC":
         assert np.array_equal(y[-nb_test:], dataset.labels[test_idx])
     if args.data == "CSC":
@@ -241,7 +299,9 @@ def run(trial):
     val_idx_dataset = Data.TensorDataset(
         torch.arange(nb_train + nb_word, nb_train + nb_word + nb_val, dtype=torch.long)
     )
-    test_idx_dataset = Data.TensorDataset(torch.arange(nb_node - nb_test, nb_node, dtype=torch.long))
+    test_idx_dataset = Data.TensorDataset(
+        torch.arange(nb_node - nb_test, nb_node, dtype=torch.long)
+    )
 
     idx_loader_train = Data.DataLoader(train_idx_dataset, batch_size=BATCHSIZE)
     idx_loader_val = Data.DataLoader(val_idx_dataset, batch_size=BATCHSIZE)
@@ -251,7 +311,13 @@ def run(trial):
         [
             {"params": model.bert_model.parameters(), "lr": BERTLR},
             {"params": model.classifier.parameters(), "lr": BERTLR},
-            {"params": model.gcn.parameters(), "lr": GCNLR},
+            # {"params": model.gcn.parameters(), "lr": GCNLR},
+            {
+                "params": model.gcn.parameters(),
+                "lr": GCNLR
+                if trial in ["train", "test"]
+                else trial.suggest_uniform("gcnlr", 1e-5, 1e-3),
+            },
         ],
         lr=GCNLR,
     )
@@ -260,7 +326,12 @@ def run(trial):
 
     graph = dgl.from_scipy(adj_norm.astype("float32"), eweight_name="edge_weight")
     graph.ndata["input_ids"] = input_ids
-    graph.ndata["label"], graph.ndata["train"], graph.ndata["val"], graph.ndata["test"] = (
+    (
+        graph.ndata["label"],
+        graph.ndata["train"],
+        graph.ndata["val"],
+        graph.ndata["test"],
+    ) = (
         torch.LongTensor(y),
         torch.FloatTensor(train_mask),
         torch.FloatTensor(val_mask),
@@ -285,12 +356,13 @@ def run(trial):
             optimizer.step()
             optimizer.zero_grad()
         graph.ndata["cls_feats"].detach_()
-        train_loss = loss.item()
-        return train_loss
+        return loss.item()
 
     def update_feature():
         nonlocal graph, model
-        dataloader = Data.DataLoader(Data.TensorDataset(graph.ndata["input_ids"][doc_mask]), batch_size=64)
+        dataloader = Data.DataLoader(
+            Data.TensorDataset(graph.ndata["input_ids"][doc_mask]), batch_size=64
+        )
         with torch.no_grad():
             model = model.to(device)
             model.eval()
@@ -331,7 +403,8 @@ def run(trial):
 
     @trainer.on(Events.EPOCH_COMPLETED)
     def reset_graph(trainer):
-        update_feature()
+        if not args.suppressupdates:
+            update_feature()
         torch.cuda.empty_cache()
 
     def eval_step(engine, batch):
@@ -349,14 +422,16 @@ def run(trial):
 
     val_evaluator = Engine(eval_step)
     val_evaluator.logger = setup_logger("val evaluator", level=30)
-    val_evaluator = Engine(eval_step)
-    val_evaluator.logger = setup_logger("val evaluator", level=30)
 
     if trial not in ["train", "test"]:
-        pruning_handler = optuna.integration.PyTorchIgnitePruningHandler(trial, "accuracy", trainer)
+        pruning_handler = optuna.integration.PyTorchIgnitePruningHandler(
+            trial, "accuracy", trainer
+        )
         val_evaluator.add_event_handler(Events.COMPLETED, pruning_handler)
     if trial not in ["train", "test"]:
-        pruning_handler = optuna.integration.PyTorchIgnitePruningHandler(trial, "accuracy", trainer)
+        pruning_handler = optuna.integration.PyTorchIgnitePruningHandler(
+            trial, "accuracy", trainer
+        )
         val_evaluator.add_event_handler(Events.COMPLETED, pruning_handler)
 
     test_evaluator = Engine(eval_step)
@@ -367,31 +442,21 @@ def run(trial):
     F1 = (precision * recall * 2 / (precision + recall)).mean()
     test_evaluator = Engine(eval_step)
     test_evaluator.logger = setup_logger("test evaluator", level=30)
-
-    precision = Precision(average=False)
-    recall = Recall(average=False)
-    F1 = (precision * recall * 2 / (precision + recall)).mean()
 
     metrics = {
         "accuracy": Accuracy(),
         "f1": F1,
         "nll": Loss(criterion),
         "cr": SklearnClassificationReport(target_names=dataset.LE.classes_),
-        "arzneireport": SklearnClassificationReport(target_names=dataset.arzneiLE.classes_, arznei=True),
+        "arzneireport": SklearnClassificationReport(
+            target_names=dataset.arzneiLE.classes_, arznei=True
+        ),
+        "cm": ConfusionMatrix(num_classes=len(dataset.LE.classes_)),
     }
 
-    # for n, f in metrics.items():
-    #     f.attach(train_evaluator, n)
-    # for n, f in metrics.items():
-    #     f.attach(train_evaluator, n)
-
-    for n, f in metrics.items():
-        f.attach(val_evaluator, n)
     for n, f in metrics.items():
         f.attach(val_evaluator, n)
 
-    for n, f in metrics.items():
-        f.attach(test_evaluator, n)
     for n, f in metrics.items():
         f.attach(test_evaluator, n)
 
@@ -423,9 +488,13 @@ def run(trial):
         require_empty=False,
     )
 
-    val_evaluator.add_event_handler(Events.COMPLETED, model_checkpoint, {"model": model})
+    val_evaluator.add_event_handler(
+        Events.COMPLETED, model_checkpoint, {"model": model}
+    )
 
-    stopping_handler = EarlyStopping(patience=args.patience, score_function=score_function, trainer=trainer)
+    stopping_handler = EarlyStopping(
+        patience=args.patience, score_function=score_function, trainer=trainer
+    )
     val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
 
     # @trainer.on(Events.ITERATION_COMPLETED(every=LOGINTERVALL))
@@ -450,7 +519,6 @@ def run(trial):
         logging.info(
             f"Validation Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
         )
-        logging.info(metrics["cr"])
 
     # @trainer.on(Events.COMPLETEDm
     # def log_test_results(trainer):
@@ -486,6 +554,7 @@ def run(trial):
     )
     logging.info(metrics["cr"])
     logging.info(metrics["arzneireport"])
+    logging.info(metrics["cm"])
 
 
 def optimize():

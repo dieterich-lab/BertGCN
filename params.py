@@ -16,14 +16,13 @@ def parse_args(*args):
         choices=["MIC", "CSC", "Patho"],
         help="`MIC` = Medication indication classification, `CSC` = Cardio:DE section classification, `Patho` = Aurélie's data.",
     )
-    # parser.add_argument("model", type=str, choices=["gbert", "medbert"])
     parser.add_argument("--testonly", action="store_true", help="If true, only tests the model and skips training.")
+    parser.add_argument("--cv", action="store_true", help="Crossvalidation.")
     parser.add_argument(
         "--noarznei", action="store_true", help="Trains the model without the sequence prefix `Arznei [...] &`."
     )
     parser.add_argument("--interpret_mode", type=str, default="gcn_bert", choices=["gcn_only", "gcn_bert"])
     parser.add_argument("--bertmodel", type=str, default="medbert", choices=["gbert", "medbert"])
-    # parser.add_argument("--bertmodel", type=str, default=None, choices=["gbert", "medbert"])
     parser.add_argument(
         "--doclevel", type=str, default="letter", choices=["letter", "diagnosis", "riskfactor", "anamnesis"]
     )

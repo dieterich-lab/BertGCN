@@ -138,7 +138,6 @@ class ModelHelper:
                 # else:
                 #     out = self.model(**item, output_hidden_states=output_hidden_states)
                 outputs.append(out)
-                torch.cuda.empty_cache()
 
                 if show_progress:
                     pbar.update(1)

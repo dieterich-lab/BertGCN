@@ -50,7 +50,7 @@ class AOPC_Comprehensiveness_Evaluation(BaseEvaluator):
         embeds = explanation.embeds
         score_explanation = explanation.scores
         _, logits = self.helper._forward(embeds=embeds, output_hidden_states=False)
-        baseline = logits.softmax(-1)[0, target].item()
+        baseline = logits.softmax(-1)[0, target].item() # baseline is actually f(x)
 
         # TODO - use tokens
         # Tokenized sentence
@@ -249,7 +249,7 @@ class TauLOO_Evaluation(BaseEvaluator):
         # item = self.helper._tokenize(embeds)
         input_len = embeds.size(1)
         # input_len = item["attention_mask"].sum().item()
-        tokens = list(map(str, range(input_len)))
+        # tokens = list(map(str, range(input_len)))
         # input_ids = item["input_ids"][0][:input_len].tolist()
         # if remove_first_last == True:
         #     input_ids = input_ids[1:-1]

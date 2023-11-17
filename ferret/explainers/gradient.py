@@ -103,4 +103,5 @@ class IntegratedGradientExplainer(BaseExplainer):
         # norm_attr = self._normalize_input_attributions(attr.detach())
         tokens = np.char.mod("%d", np.arange(embeds.size(1))).tolist()
         output = Explanation(embeds, tokens, attr, self.NAME, target)
+        # output = Explanation(embeds.detach().cpu().numpy(), tokens, attr, self.NAME, target)
         return output
