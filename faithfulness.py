@@ -335,7 +335,7 @@ for target_id1 in range(test_mask.sum()):
 for ev in eval_list:
     for ex in ev:
         ex.explanation.embeds = ex.explanation.embeds.detach().cpu().numpy()
-        break
+        # break
 
 logging.info("Saving Evaluations")
 with open(f"{IGFILE}.json", "wb") as f:

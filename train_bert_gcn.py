@@ -147,13 +147,30 @@ elif args.data == "CSC":
 
 if args.data == "MIC":
     if not args.testunklar:
-        idx = np.arange(len(dataset))
-        random.shuffle(idx)
-        train_idx, val_idx, test_idx = (
-            idx[: int(len(idx) * 0.7)],
-            idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
-            idx[int(len(idx) * 0.8) :],
-        )
+        if not args.cv:
+            idx = np.arange(len(dataset))
+            random.shuffle(idx)
+            train_idx, val_idx, test_idx = (
+                idx[: int(len(idx) * 0.7)],
+                idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
+                idx[int(len(idx) * 0.8) :],
+            )
+        else:
+            train_idxx, val_idxx, test_idxx = list(), list(), list()
+            # random.seed(0)
+            # np.random.seed(0)
+            # torch.manual_seed(0)
+            for i in range(10):
+                idx = np.arange(len(dataset))
+                random.shuffle(idx)
+                train_idx, val_idx, test_idx = (
+                    idx[: int(len(idx) * 0.7)],
+                    idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
+                    idx[int(len(idx) * 0.8) :],
+                )
+                train_idxx.append(train_idx)
+                val_idxx.append(val_idx)
+                test_idxx.append(test_idx)
     else:
         _train_idx, test_idx = list(), list()
         for i, x in enumerate(dataset):
@@ -176,7 +193,14 @@ elif args.data == "CSC":
     train_idx, val_idx = idx[: int(len(idx) * 0.9)], idx[int(len(idx) * 0.9) :]
 
 
-def run(trial):
+def run(trial, i=None):
+    global DATASETPATH, BERTPATH, SAVEDIR, GCNSAVEPATH, train_idx, val_idx, test_idx
+    _DATASETPATH, _BERTPATH, _SAVEDIR, _GCNSAVEPATH = DATASETPATH, BERTPATH, SAVEDIR, GCNSAVEPATH
+    if i is not None:
+        DATASETPATH = DATASETPATH.parent / str(i) / DATASETPATH.name
+        BERTPATH = BERTPATH.parent / str(i) / BERTPATH.name
+        GCNSAVEPATH = GCNSAVEPATH.parent / str(i) / GCNSAVEPATH.name
+        SAVEDIR /= str(i)
     (
         adj,
         features,
@@ -226,9 +250,13 @@ def run(trial):
     # document mask used for update feature
     doc_mask = train_mask + val_mask + test_mask
 
-    # tokenizer = AutoTokenizer.from_pretrained(MODELTYPE)
 
     # logging.info(f"Len idx: {len(train_idx)} {len(val_idx)} {len(test_idx)}")
+
+    if i is not None:
+        train_idx = train_idxx[i]
+        val_idx = val_idxx[i]
+        test_idx = test_idxx[i]
 
     if args.data == "MIC":
         input_ids = torch.cat(
@@ -437,9 +465,9 @@ def run(trial):
     test_evaluator = Engine(eval_step)
     test_evaluator.logger = setup_logger("test evaluator", level=30)
 
-    precision = Precision(average=False)
-    recall = Recall(average=False)
-    F1 = (precision * recall * 2 / (precision + recall)).mean()
+    precision = Precision(average="macro")
+    recall = Recall(average="macro")
+    F1 = precision * recall * 2 / (precision + recall)
     test_evaluator = Engine(eval_step)
     test_evaluator.logger = setup_logger("test evaluator", level=30)
 
@@ -520,7 +548,7 @@ def run(trial):
             f"Validation Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
         )
 
-    # @trainer.on(Events.COMPLETEDm
+    # @trainer.on(Events.COMPLETED
     # def log_test_results(trainer):
     #     test_evaluator.run(idx_loader_test)
     #     metrics = test_evaluator.state.metrics
@@ -553,13 +581,15 @@ def run(trial):
         f"Test results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
     )
     logging.info(metrics["cr"])
-    logging.info(metrics["arzneireport"])
+    # logging.info(metrics["arzneireport"])
     logging.info(metrics["cm"])
+    DATASETPATH, BERTPATH, SAVEDIR, GCNSAVEPATH = _DATASETPATH, _BERTPATH, _SAVEDIR, _GCNSAVEPATH
+    return metrics["accuracy"], metrics["f1"]
 
 
 def optimize():
     study = optuna.create_study(direction="maximize")
-    study.optimize(run, n_trials=10)
+    study.optimize(run, n_trials=30)
 
     print("Number of finished trials: ", len(study.trials))
 
@@ -576,7 +606,19 @@ def optimize():
 if args.optimize:
     optimize()
 else:
-    if args.testonly:
-        run("test")
+    if not args.cv:
+        if args.testonly:
+            run("test")
+        else:
+            run("train")
     else:
-        run("train")
+        f1s, accs = list(), list()
+        for i in range(10):
+            if args.testonly:
+                acc, f1 = run("test", i)
+            else:
+                acc, f1 = run("train", i)
+            f1s.append(f1)
+            accs.append(acc)
+        logging.info(f"Mean F1 scores: {np.mean(f1s)}, Std: {np.std(f1s)}")
+        logging.info(f"Mean accuracies: {np.mean(accs)}, Std: {np.std(accs)}")

@@ -108,9 +108,8 @@ class CleanClinicDataset(Dataset):
                 self.texts, add_special_tokens=True, truncation=True, is_split_into_words=True, padding="max_length"
             )
             self.examples = [{"input_ids": np.array(e)} for e in batch_encoding["input_ids"]]
-            for l, e, a in zip(self.labels, self.examples, self.arznei):
+            for l, e in zip(self.labels, self.examples):
                 e.update({"labels": l})
-                e.update({"arznei": a})
 
             self.texts = [" ".join(x) for x in self.texts]
 
