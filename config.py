@@ -1,0 +1,107 @@
+"""
+Configuration and path management for BertGCN project.
+
+This module provides centralized configuration for data paths, model storage,
+and project settings to ensure consistency across all components.
+"""
+
+import os
+from pathlib import Path
+from typing import Optional
+
+
+class ProjectPaths:
+    """Centralized path management for the BertGCN project."""
+
+    def __init__(self, base_dir: Optional[Path] = None):
+        """Initialize project paths."""
+        if base_dir is None:
+            base_dir = Path(__file__).parent
+
+        self.base_dir = Path(base_dir)
+
+        # Main directories
+        self.data_dir = self.base_dir / "outputs" / "data"
+        self.models_dir = self.base_dir / "outputs" / "models"
+        self.cache_dir = self.base_dir / "outputs" / "cache"
+        self.logs_dir = self.base_dir / "outputs" / "logs"
+
+        # Data subdirectories
+        self.datasets_dir = self.data_dir / "datasets"
+        self.graphs_dir = self.data_dir / "graphs"
+        self.features_dir = self.data_dir / "features"
+
+        # Model subdirectories
+        self.checkpoints_dir = self.models_dir / "checkpoints"
+        self.finetuned_dir = self.models_dir / "finetuned"
+        self.gcn_dir = self.models_dir / "gcn"
+
+        # Create all directories
+        self._create_directories()
+
+    def _create_directories(self):
+        """Create all necessary directories."""
+        dirs = [
+            self.data_dir,
+            self.models_dir,
+            self.cache_dir,
+            self.logs_dir,
+            self.datasets_dir,
+            self.graphs_dir,
+            self.features_dir,
+            self.checkpoints_dir,
+            self.finetuned_dir,
+            self.gcn_dir,
+        ]
+
+        for dir_path in dirs:
+            dir_path.mkdir(parents=True, exist_ok=True)
+
+    def get_dataset_path(
+        self,
+        doclevel: str,
+        model_type: str = "medbert",
+        suffix: str = "",
+        clean: bool = True,
+    ) -> Path:
+        """Get path for dataset file."""
+        clean_suffix = "_clean" if clean else ""
+        filename = f"medindcls_{model_type}_{doclevel}{suffix}{clean_suffix}.pkl"
+        return self.datasets_dir / filename
+
+    def get_graph_path(
+        self, dataset_name: str, doclevel: str, testunklar: bool = False
+    ) -> Path:
+        """Get directory path for graph files."""
+        suffix = "_testunklar" if testunklar else ""
+        graph_name = f"{dataset_name}_{doclevel}{suffix}"
+        return self.graphs_dir / graph_name
+
+    def get_model_path(
+        self, model_type: str, doclevel: str, experiment_name: Optional[str] = None
+    ) -> Path:
+        """Get path for model storage."""
+        if model_type == "bert":
+            base_path = self.finetuned_dir / doclevel
+        elif model_type == "gcn":
+            base_path = self.gcn_dir / doclevel
+        else:
+            base_path = self.checkpoints_dir / model_type / doclevel
+
+        if experiment_name:
+            base_path = base_path / experiment_name
+
+        return base_path
+
+    def get_cache_path(self, cache_type: str) -> Path:
+        """Get path for cache files."""
+        return self.cache_dir / cache_type
+
+
+# Global instance for easy access
+paths = ProjectPaths()
+
+
+def get_paths() -> ProjectPaths:
+    """Get the global paths instance."""
+    return paths

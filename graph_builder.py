@@ -20,6 +20,7 @@ from torch.utils.data import Subset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from clinic_datasets import CleanClinicDataset
+from config import get_paths
 from entry import PRETRAINEDMODEL
 from text_utils import (
     build_vocabulary_from_tokens,
@@ -406,15 +407,17 @@ class DocumentWordGraphBuilder:
         self,
         adj_matrix: csr_matrix,
         metadata: Dict,
-        output_dir: Path,
         dataset_name: str,
         testunklar: bool = False,
     ) -> None:
         """Save all graph-related data files."""
+        paths = get_paths()
+        output_dir = paths.get_graph_path(dataset_name, self.doclevel, testunklar)
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        suffix = "_testunklar" if testunklar else ""
-        base_name = f"ind.{dataset_name}_{self.doclevel}{suffix}"
+        base_name = f"ind.{dataset_name}_{self.doclevel}"
+        if testunklar:
+            base_name += "_testunklar"
 
         # Create data matrices
         train_size = metadata["train_size"]
@@ -464,7 +467,7 @@ class DocumentWordGraphBuilder:
         with open(metadata_path, "wb") as f:
             pickle.dump(metadata, f)
 
-        self.logger.info(f"Graph data saved to {output_dir} with base name {base_name}")
+        self.logger.info(f"Graph data saved to {output_dir}")
 
 
 def main():
@@ -480,8 +483,7 @@ def main():
         level=logging.INFO,
     )
 
-    # Example configuration - adjust these for your needs
-    doclevel = args.doclevel  # or "sentence", "paragraph"
+    doclevel = args.doclevel
     testunklar = args.testunklar
 
     # Initialize tokenizer and graph builder
@@ -493,15 +495,13 @@ def main():
     )
 
     # Build graph
-    dataset_file = Path("data") / f"medindcls_medbert_{doclevel}_clean.pkl"
+    paths = get_paths()
+    dataset_file = paths.get_dataset_path(doclevel, "medbert", clean=True)
     adj_matrix, metadata = builder.build_graph(dataset_file, testunklar=testunklar)
 
     # Save graph data
-    output_dir = Path("data")
     dataset_name = f"medindcls_{doclevel}"
-    builder.save_graph_data(
-        adj_matrix, metadata, output_dir, dataset_name, testunklar=testunklar
-    )
+    builder.save_graph_data(adj_matrix, metadata, dataset_name, testunklar=testunklar)
 
     print(f"Graph built successfully!")
     print(f"Nodes: {metadata['node_size']}")
