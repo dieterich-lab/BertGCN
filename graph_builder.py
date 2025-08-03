@@ -21,6 +21,13 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from clinic_datasets import CleanClinicDataset
 from entry import PRETRAINEDMODEL
+from text_utils import (
+    build_vocabulary_from_tokens,
+    calculate_word_document_frequencies,
+    generate_sliding_windows,
+    log_processing_stats,
+    tokenize_texts_batch,
+)
 
 
 @dataclass
@@ -63,6 +70,9 @@ class DocumentWordGraphBuilder:
         self.vocab_size: int = 0
         self.embed_dim: int = 0
 
+        # Cache for performance optimization
+        self._tokenized_texts: Optional[List[List[str]]] = None
+
     def load_or_create_dataset(
         self, dataset_file: Path, force_recreate: bool = False
     ) -> CleanClinicDataset:
@@ -84,21 +94,35 @@ class DocumentWordGraphBuilder:
         self.dataset = dataset
         return dataset
 
+    def _get_tokenized_texts(self) -> List[List[str]]:
+        """Get cached tokenized texts for performance."""
+        if self._tokenized_texts is None:
+            self.logger.info("Tokenizing texts for graph building")
+            self._tokenized_texts = [text.split() for text in self.dataset.texts]
+        return self._tokenized_texts
+
     def _get_embedding_dimension(self) -> int:
         """Get embedding dimension from pretrained model."""
-        model = AutoModelForSequenceClassification.from_pretrained(
-            self.tokenizer.name_or_path
-        )
-        embed_dim = model.bert.embeddings.word_embeddings.embedding_dim
-        del model  # Free memory
-        return embed_dim
+        try:
+            model = AutoModelForSequenceClassification.from_pretrained(
+                self.tokenizer.name_or_path
+            )
+            embed_dim = model.bert.embeddings.word_embeddings.embedding_dim
+            del model  # Free memory
+            return embed_dim
+        except Exception as e:
+            self.logger.error(f"Failed to load model for embedding dimension: {e}")
+            # Fallback to common BERT dimension
+            return 768
 
     def _build_vocabulary(self) -> Tuple[List[str], Dict[str, int]]:
         """Build vocabulary from dataset texts."""
         self.logger.info("Building vocabulary")
 
+        # Use cached tokenized texts for better performance
+        tokenized_texts = self._get_tokenized_texts()
         word_counter = Counter(
-            word for text in self.dataset.texts for word in text.split()
+            word for text_tokens in tokenized_texts for word in text_tokens
         )
 
         # Filter by minimum frequency if needed
@@ -122,13 +146,15 @@ class DocumentWordGraphBuilder:
         """Calculate how many documents each word appears in."""
         self.logger.info("Calculating word-document statistics")
 
-        word_in_docs = defaultdict(set)
-        words_per_text_sets = [set(text.split()) for text in self.dataset.texts]
+        # Use cached tokenized texts and set operations for better performance
+        tokenized_texts = self._get_tokenized_texts()
+        vocab_set = set(self.vocab)
 
-        for word in self.vocab:
-            for doc_idx, doc_words in enumerate(words_per_text_sets):
-                if word in doc_words:
-                    word_in_docs[word].add(doc_idx)
+        word_in_docs = defaultdict(set)
+        for doc_idx, doc_tokens in enumerate(tokenized_texts):
+            doc_vocab = vocab_set.intersection(doc_tokens)
+            for word in doc_vocab:
+                word_in_docs[word].add(doc_idx)
 
         return {word: len(docs) for word, docs in word_in_docs.items()}
 
@@ -137,8 +163,9 @@ class DocumentWordGraphBuilder:
         self.logger.info("Generating sliding windows")
 
         windows = []
-        for text in self.dataset.texts:
-            words = text.split()
+        tokenized_texts = self._get_tokenized_texts()
+
+        for words in tokenized_texts:
             length = len(words)
 
             # Add first window
@@ -147,8 +174,7 @@ class DocumentWordGraphBuilder:
 
             # Add sliding windows
             for j in range(1, length - self.config.window_size + 1):
-                window = words[j : j + self.config.window_size]
-                windows.append(window)
+                windows.append(words[j : j + self.config.window_size])
 
         return windows
 
@@ -222,12 +248,15 @@ class DocumentWordGraphBuilder:
         """Calculate TF-IDF weights for document-word connections."""
         self.logger.info("Calculating TF-IDF weights")
 
+        # Use cached tokenized texts for better performance
+        tokenized_texts = self._get_tokenized_texts()
+
         # Calculate document-word frequencies for all splits
         doc_word_freq = defaultdict(int)
         all_indices = self.train_indices + self.val_indices + self.test_indices
 
         for doc_id in all_indices:
-            words = self.dataset.texts[doc_id].split()
+            words = tokenized_texts[doc_id]
             for word in words:
                 if word in self.word2id:
                     word_id = self.word2id[word]
@@ -249,7 +278,7 @@ class DocumentWordGraphBuilder:
 
         for indices, base_offset in splits:
             for split_idx, doc_id in enumerate(indices):
-                words = self.dataset.texts[doc_id].split()
+                words = tokenized_texts[doc_id]
                 doc_word_set = set()
 
                 for word in words:

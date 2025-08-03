@@ -171,11 +171,12 @@ class CleanClinicDataset:
     @property
     def ohe_labels(self) -> np.ndarray:
         """Get one-hot encoded labels."""
-        import numpy as np
-        from sklearn.preprocessing import LabelBinarizer
+        if not hasattr(self, "_ohe_labels_cache"):
+            from sklearn.preprocessing import LabelBinarizer
 
-        lb = LabelBinarizer()
-        return lb.fit_transform(self.dataset["label_id"])
+            lb = LabelBinarizer()
+            self._ohe_labels_cache = lb.fit_transform(self.dataset["label_id"])
+        return self._ohe_labels_cache
 
     def __str__(self) -> str:
         return self.file_path.stem
