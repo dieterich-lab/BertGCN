@@ -1,0 +1,48 @@
+# BertGCN Model Configuration
+_target_: bertgcn.models.BertGCN
+
+# Model architecture
+architecture:
+  pretrained_model: "/prj/doctoral_letters/PETGUI/med_bert_local"
+  num_classes: 20
+  mix_factor: 0.7
+  gcn_layers: 2
+  hidden_dim: 200
+  dropout: 0.5
+  activation: "elu"
+
+# BERT specific settings
+bert:
+  max_length: 512
+  model_name: "medbert"
+  freeze_embeddings: false
+  gradient_checkpointing: true
+
+# GCN specific settings
+gcn:
+  normalization: "both"
+  edge_weight_threshold: 0.01
+  self_loops: true
+  residual_connections: false
+
+# Graph construction
+graph:
+  window_size: 20
+  min_word_freq: 1
+  tfidf_threshold: 0.0
+  pmi_threshold: 0.0
+
+# Model optimization
+optimization:
+  bert_lr: 1.0e-5
+  gcn_lr: 1.0e-4
+  weight_decay: 0.01
+  warmup_steps: 1000
+  scheduler: "cosine"
+  gradient_clip_val: 1.0
+
+# Regularization
+regularization:
+  dropout: 0.5
+  label_smoothing: 0.1
+  mixup_alpha: 0.2

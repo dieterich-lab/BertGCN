@@ -1,0 +1,57 @@
+# Default configuration for BertGCN
+defaults:
+  - model: bertgcn
+  - data: clinical
+  - training: default
+  - logging: mlflow
+  - monitoring: prometheus
+  - _self_
+
+# Experiment configuration
+experiment:
+  name: "bertgcn_clinical_classification"
+  version: "1.0.0"
+  description: "Clinical text classification using BertGCN"
+  tags:
+    - clinical
+    - graph-neural-network
+    - bert
+
+# Environment settings
+environment:
+  cuda_visible_devices: "0"
+  tokenizers_parallelism: false
+  torch_num_threads: 4
+
+# Data paths
+paths:
+  data_dir: "${oc.env:BERTGCN_DATA_DIR,./outputs/data}"
+  models_dir: "${oc.env:BERTGCN_MODELS_DIR,./outputs/models}"
+  logs_dir: "${oc.env:BERTGCN_LOGS_DIR,./outputs/logs}"
+  cache_dir: "${oc.env:BERTGCN_CACHE_DIR,./outputs/cache}"
+
+# Random seeds for reproducibility
+seed:
+  global: 42
+  data: 42
+  model: 42
+
+# Resource limits
+resources:
+  max_memory_gb: 16
+  max_cpu_cores: 8
+  gpu_memory_fraction: 0.9
+
+# Monitoring and alerting
+alerts:
+  enabled: true
+  slack_webhook: "${oc.env:SLACK_WEBHOOK_URL,}"
+  email_recipients: []
+
+# Model serving
+serving:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  timeout: 300
+  max_batch_size: 32
