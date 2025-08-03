@@ -7,6 +7,7 @@ from pathlib import Path
 
 import dgl
 import optuna
+import pandas as pd
 import torch
 import torch.utils.data as Data
 from ignite.engine import Engine, Events
@@ -32,11 +33,12 @@ random.seed(0)
 np.random.seed(0)
 torch.manual_seed(0)
 
-BERTLR = 5e-5
-GCNLR = 3e-5
-LR = 4e-5
+# BERTLR = 1e-6
+BERTLR = 1e-5
+GCNLR = 1e-4
 BATCHSIZE = 8
-NEPOCHS = 50
+NEPOCHS = args.nepochs
+# ACCUSTEPS = 1
 ACCUSTEPS = 8
 LOGINTERVALL = 100
 
@@ -79,6 +81,10 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
     level=logging.INFO,
     handlers=handlers,
+)
+
+logging.info(
+    f"BERT learning rate {BERTLR}, GCN learning rate {GCNLR}, Batch size {BATCHSIZE} Accu steps {ACCUSTEPS}"
 )
 
 logging.info(f"{'=== Params ===':>32}")
@@ -195,7 +201,12 @@ elif args.data == "CSC":
 
 def run(trial, i=None):
     global DATASETPATH, BERTPATH, SAVEDIR, GCNSAVEPATH, train_idx, val_idx, test_idx
-    _DATASETPATH, _BERTPATH, _SAVEDIR, _GCNSAVEPATH = DATASETPATH, BERTPATH, SAVEDIR, GCNSAVEPATH
+    _DATASETPATH, _BERTPATH, _SAVEDIR, _GCNSAVEPATH = (
+        DATASETPATH,
+        BERTPATH,
+        SAVEDIR,
+        GCNSAVEPATH,
+    )
     if i is not None:
         DATASETPATH = DATASETPATH.parent / str(i) / DATASETPATH.name
         BERTPATH = BERTPATH.parent / str(i) / BERTPATH.name
@@ -249,7 +260,6 @@ def run(trial, i=None):
 
     # document mask used for update feature
     doc_mask = train_mask + val_mask + test_mask
-
 
     # logging.info(f"Len idx: {len(train_idx)} {len(val_idx)} {len(test_idx)}")
 
@@ -339,12 +349,13 @@ def run(trial, i=None):
         [
             {"params": model.bert_model.parameters(), "lr": BERTLR},
             {"params": model.classifier.parameters(), "lr": BERTLR},
-            # {"params": model.gcn.parameters(), "lr": GCNLR},
             {
                 "params": model.gcn.parameters(),
-                "lr": GCNLR
-                if trial in ["train", "test"]
-                else trial.suggest_uniform("gcnlr", 1e-5, 1e-3),
+                "lr": (
+                    GCNLR
+                    if trial in ["train", "test"]
+                    else trial.suggest_uniform("gcnlr", 1e-5, 1e-3)
+                ),
             },
         ],
         lr=GCNLR,
@@ -412,10 +423,6 @@ def run(trial, i=None):
     # torch_lr_scheduler = ExponentialLR(optimizer=optimizer, gamma=0.5)
     # scheduler = LRScheduler(torch_lr_scheduler)
     # trainer.add_event_handler(Events.EPOCH_COMPLETED, scheduler)
-    # torch_lr_scheduler = ExponentialLR(optimizer=optimizer, gamma=0.5)
-    # scheduler = LRScheduler(torch_lr_scheduler)
-    # trainer.add_event_handler(Events.EPOCH_COMPLETED, scheduler)
-
     # scheduler = create_lr_scheduler_with_warmup(
     #     torch_lr_scheduler, warmup_start_value=0.0, warmup_end_value=LR, warmup_duration=len(idx_loader_train)
     # )
@@ -425,9 +432,6 @@ def run(trial, i=None):
     # scheduler = create_lr_scheduler_with_warmup(
     #     torch_lr_scheduler, warmup_start_value=0.0, warmup_end_value=LR, warmup_duration=len(idx_loader_train)
     # )
-    # combined_events = Events.ITERATION_STARTED(event_filter=lambda _, __: trainer.state.iteration <= len(idx_loader_train))
-    # combined_events |= Events.EPOCH_STARTED(event_filter=lambda _, __: trainer.state.epoch > 2)
-    # trainer.add_event_handler(combined_events, scheduler)
 
     @trainer.on(Events.EPOCH_COMPLETED)
     def reset_graph(trainer):
@@ -446,7 +450,6 @@ def run(trial, i=None):
             y_true = graph.ndata["label"][idx]
             arznei = graph.ndata["arznei"][idx]
             return y_pred, y_true, arznei
-            # return y_pred, y_true
 
     val_evaluator = Engine(eval_step)
     val_evaluator.logger = setup_logger("val evaluator", level=30)
@@ -476,8 +479,12 @@ def run(trial, i=None):
         "f1": F1,
         "nll": Loss(criterion),
         "cr": SklearnClassificationReport(target_names=dataset.LE.classes_),
+        "cr_dict": SklearnClassificationReport(
+            output_dict=True,
+            target_names=dataset.LE.classes_,
+        ),
         "arzneireport": SklearnClassificationReport(
-            target_names=dataset.arzneiLE.classes_, arznei=True
+            target_names=dataset.medsLE.classes_, arznei=True
         ),
         "cm": ConfusionMatrix(num_classes=len(dataset.LE.classes_)),
     }
@@ -583,7 +590,22 @@ def run(trial, i=None):
     logging.info(metrics["cr"])
     # logging.info(metrics["arzneireport"])
     logging.info(metrics["cm"])
-    DATASETPATH, BERTPATH, SAVEDIR, GCNSAVEPATH = _DATASETPATH, _BERTPATH, _SAVEDIR, _GCNSAVEPATH
+
+    report = metrics["cr_dict"]
+    df = pd.DataFrame(report).transpose()
+    df.to_csv(f"{SAVEDIR}/{args.bertmodel}_cr.csv")
+    # logging.info(df.to_latex(index=False, float_format="{:.2f}".format))
+    logging.info(metrics["cr"])
+    cm = metrics["cm"].detach().cpu().numpy()
+    with open(f"{SAVEDIR}/{args.bertmodel}_cm.npy", "wb") as f:
+        np.save(f, cm)
+
+    DATASETPATH, BERTPATH, SAVEDIR, GCNSAVEPATH = (
+        _DATASETPATH,
+        _BERTPATH,
+        _SAVEDIR,
+        _GCNSAVEPATH,
+    )
     return metrics["accuracy"], metrics["f1"]
 
 

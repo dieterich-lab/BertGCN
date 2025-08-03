@@ -7,12 +7,15 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 from ignite.engine import Engine, Events
 from ignite.handlers import EarlyStopping
 from ignite.handlers.param_scheduler import create_lr_scheduler_with_warmup
 from ignite.metrics import Accuracy, ClassificationReport, Loss, Precision, Recall
+from ignite.metrics.confusion_matrix import ConfusionMatrix
 from ignite.utils import convert_tensor, setup_logger
+from torch.optim import lr_scheduler
 from torch.optim.lr_scheduler import ExponentialLR, ReduceLROnPlateau
 from torch.utils.data import DataLoader, Subset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -25,10 +28,12 @@ from utils import *
 
 args = parse_args()
 
-LEARNINGRATE = 5e-5
-NEPOCHS = 50
+# LR = 5e-6
+LR = 1e-5
+NEPOCHS = args.nepochs
 BATCHSIZE = 8
-ACCUSTEPS = 8
+# ACCUSTEPS = 8
+ACCUSTEPS = 1
 
 random.seed(0)
 np.random.seed(0)
@@ -51,7 +56,13 @@ logging.basicConfig(
     level=logging.INFO,
     handlers=handlers,
 )
+
+logging.info(
+    f"Learning rate {LR}, Batch size {BATCHSIZE} Accu steps {ACCUSTEPS}"
+)
+
 tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
+
 
 if args.data == "MIC":
     if args.noarznei:
@@ -123,13 +134,14 @@ elif args.data == "CSC":
     os.makedirs(SAVEDIR, exist_ok=True)
     SAVEPATH = Path(f"{SAVEDIR}/{SAVENAME}_{dataset}_best.pt")
 
-if not args.cv: 
+if not args.cv:
     model = AutoModelForSequenceClassification.from_pretrained(
         PRETRAINEDMODEL, num_labels=len(dataset.LE.classes_)
     )
 
-    optimizer = torch.optim.AdamW(model.parameters(), LEARNINGRATE)
+    optimizer = torch.optim.AdamW(model.parameters(), LR)
     scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
+    # scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[30], gamma=0.1)
 
 if args.data == "MIC":
     if not args.testunklar:
@@ -267,11 +279,13 @@ test_evaluator = Engine(eval_step)
 
 precision = Precision(average="macro")
 recall = Recall(average="macro")
-F1 = (precision * recall * 2 / (precision + recall))
 
 metrics = {
     "accuracy": Accuracy(),
-    "f1": F1,
+    "f1": Precision(average="macro")
+    * Recall(average="macro")
+    * 2
+    / (Precision(average="macro") + Recall(average="macro")),
     "precision": Precision(average="macro"),
     "recall": Recall(average="macro"),
     "nll": Loss(criterion),
@@ -280,6 +294,13 @@ metrics = {
             dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels))
         ]
     ),
+    "cr_dict": SklearnClassificationReport(
+        output_dict=True,
+        target_names=[
+            dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels))
+        ]
+    ),
+    "cm": ConfusionMatrix(num_classes=len(dataset.LE.classes_)),
 }
 
 for n, f in metrics.items():
@@ -293,8 +314,15 @@ def score_function(engine):
     return -1.0 * engine.state.metrics["nll"]
 
 
+def f1_function(engine):
+    return engine.state.metrics["f1"]
+
+
 stopping_handler = EarlyStopping(
-    patience=3, score_function=score_function, trainer=trainer
+    patience=args.patience,
+    # score_function=f1_function,
+    score_function=score_function,
+    trainer=trainer,
 )
 val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
 
@@ -311,13 +339,20 @@ val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
 
 
 if not args.cv:
+
     @trainer.on(Events.EPOCH_COMPLETED)
     def log_validation_results(trainer):
         val_evaluator.run(val_loader)
         metrics = val_evaluator.state.metrics
         scheduler.step(metrics["nll"])
+        prec, rec, f1, acc = (
+            metrics["precision"],
+            metrics["recall"],
+            metrics["f1"],
+            metrics["accuracy"],
+        )
         logging.info(
-            f"Validation Results - Epoch: {trainer.state.epoch}  Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
+            f"Validation Results - Epoch: {trainer.state.epoch} Prec: {prec:.2f} Rec: {rec:.2f} F1: {f1:.2f} Acc: {acc:.2f}  Avg loss: {metrics['nll']:.2f}"
         )
         if metrics["accuracy"] > log_validation_results.best_val_acc:
             torch.save(
@@ -348,17 +383,28 @@ if not args.cv:
     logging.info(
         f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
     )
+
+    report = metrics["cr_dict"]
+    df = pd.DataFrame(report).transpose()
+    df.to_csv(f"{SAVEDIR}/{args.bertmodel}_cr.csv")
+    logging.info(df.to_latex(index=False, float_format="{:.2f}".format))
     logging.info(metrics["cr"])
+    cm = metrics["cm"].detach().cpu().numpy()
+    with open(f"{SAVEDIR}/{args.bertmodel}_cm.npy", "wb") as f:
+        np.save(f, cm)
+
 else:
     f1s, accs = list(), list()
     for i in range(10):
-        logging.info(f"Training split {i}...")
+        logging.info(f"Training split {i} ...")
 
         model = AutoModelForSequenceClassification.from_pretrained(
             PRETRAINEDMODEL, num_labels=len(dataset.LE.classes_)
         )
-        
-        optimizer = torch.optim.AdamW(model.parameters(), LEARNINGRATE)
+
+        optimizer = torch.optim.AdamW(model.parameters(), LR)
+        scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
+        # scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[30], gamma=0.1)
 
         SAVEPATH = Path(f"{SAVEDIR}/{i}/{SAVENAME}_{dataset}_best.pt")
         os.makedirs(Path(f"{SAVEDIR}/{i}"), exist_ok=True)
@@ -380,11 +426,8 @@ else:
                 optimizer.zero_grad()
             return loss.item()
 
-
         trainer = Engine(train_step)
         trainer.logger = setup_logger("trainer", level=30)
-
-        scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
 
         def eval_step(engine, batch):
             global model
@@ -399,10 +442,9 @@ else:
                 y_pred = model(x).logits
                 return y_pred, y
 
-
         val_evaluator = Engine(eval_step)
         stopping_handler = EarlyStopping(
-            patience=3, score_function=score_function, trainer=trainer
+            patience=args.patience, score_function=score_function, trainer=trainer
         )
         val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
 
@@ -410,7 +452,10 @@ else:
 
         metrics = {
             "accuracy": Accuracy(),
-            "f1": F1,
+            "f1": Precision(average="macro")
+            * Recall(average="macro")
+            * 2
+            / (Precision(average="macro") + Recall(average="macro")),
             "precision": Precision(average="macro"),
             "recall": Recall(average="macro"),
             "nll": Loss(criterion),
@@ -419,6 +464,13 @@ else:
                     dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels))
                 ]
             ),
+            "cr_dict": SklearnClassificationReport(
+                output_dict=True,
+                target_names=[
+                    dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels))
+                ]
+            ),
+            "cm": ConfusionMatrix(num_classes=len(dataset.LE.classes_)),
         }
 
         for n, f in metrics.items():
@@ -431,9 +483,14 @@ else:
         def log_validation_results(trainer):
             val_evaluator.run(val_loaders[i])
             metrics = val_evaluator.state.metrics
-            prec, rec, f1, acc = metrics["precision"], metrics["recall"], metrics["f1"], metrics["accuracy"]
+            prec, rec, f1, acc = (
+                metrics["precision"],
+                metrics["recall"],
+                metrics["f1"],
+                metrics["accuracy"],
+            )
             logging.info(
-                f"Validation Results - Epoch: {trainer.state.epoch} Prec: {prec:.2f} Rec: {rec:.2f} Acc: {acc:.2f}  F1: {f1:.2f} Avg accuracy: {acc:.2f} Avg loss: {metrics['nll']:.2f}"
+                f"Validation Results - Epoch: {trainer.state.epoch} Prec: {prec:.2f} Rec: {rec:.2f} F1: {f1:.2f} Acc: {acc:.2f}  Avg loss: {metrics['nll']:.2f}"
             )
             if metrics["accuracy"] > log_validation_results.best_val_acc:
                 torch.save(
@@ -451,7 +508,6 @@ else:
 
         log_validation_results.best_val_acc = 0
 
-
         trainer.run(train_loaders[i], max_epochs=NEPOCHS)
 
         logging.info(
@@ -462,12 +518,26 @@ else:
         model.classifier.load_state_dict(ckpt["classifier"])
         test_evaluator.run(test_loaders[i])
         metrics = test_evaluator.state.metrics
-        prec, rec, f1, acc = metrics["precision"], metrics["recall"], metrics["f1"], metrics["accuracy"]
+        prec, rec, f1, acc = (
+            metrics["precision"],
+            metrics["recall"],
+            metrics["f1"],
+            metrics["accuracy"],
+        )
         logging.info(
             f"Test Results - Epoch[{trainer.state.epoch}] Precison: {prec:.2f} Recall: {rec:.2f} F1: {f1:.2f} Avg accuracy: {acc:.2f} Avg loss: {metrics['nll']:.2f}"
         )
         f1s.append(f1)
         accs.append(acc)
+        report = metrics["cr_dict"]
+        df = pd.DataFrame(report).transpose()
+        df.to_csv(f"{SAVEDIR}/{i}/{args.bertmodel}_cr.csv")
+        logging.info(df.to_latex(index=False, float_format="{:.2f}".format))
+
         logging.info(metrics["cr"])
+        cm = metrics["cm"].detach().cpu().numpy()
+        with open(f"{SAVEDIR}/{i}/{args.bertmodel}_cm.npy", "wb") as f:
+            np.save(f, cm)
+
     logging.info(f"Mean F1 scores: {np.mean(f1s)}, Std: {np.std(f1s)}")
     logging.info(f"Mean accuracies: {np.mean(accs)}, Std: {np.std(accs)}")

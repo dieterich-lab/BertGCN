@@ -33,7 +33,7 @@ DATADICT = {
 }
 
 PRETRAINEDPATHDICT = {
-    "gbert": "deepset/gbert-base",
+    # "gbert": "deepset/gbert-base",
     "medbert": "/prj/doctoral_letters/PETGUI/med_bert_local",
 }
 

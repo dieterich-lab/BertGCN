@@ -14,9 +14,11 @@ class SklearnClassificationReport(Metric):
         self,
         target_names=None,
         arznei=False,
+        output_dict=False,
         output_transform=lambda x: x,
         device="cpu",
     ):
+        self.output_dict = output_dict
         if arznei:
             self.arznei = list()
         self.target_names = target_names
@@ -69,12 +71,22 @@ class SklearnClassificationReport(Metric):
         else:
             target_names = [self.target_names[i] for i in np.unique(self.y)]
             warnings.filterwarnings("ignore")
-            report = classification_report(
-                self.y,
-                self.y_pred,
-                target_names=target_names,
-                labels=np.unique(self.y),
-                zero_division=0,
-            )
+            if not self.output_dict:
+                report = classification_report(
+                    self.y,
+                    self.y_pred,
+                    target_names=target_names,
+                    labels=np.unique(self.y),
+                    zero_division=0,
+                )
+            else:
+                report = classification_report(
+                    self.y,
+                    self.y_pred,
+                    target_names=target_names,
+                    labels=np.unique(self.y),
+                    zero_division=0,
+                    output_dict=True
+                )
             warnings.resetwarnings()
         return report

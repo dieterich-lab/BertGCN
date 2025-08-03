@@ -21,6 +21,7 @@ args = parse_args()
 
 random.seed(0)
 np.random.seed(0)
+torch.manual_seed(0)
 
 logging.basicConfig(
     format=f"%(asctime)s - %(message)s",
@@ -31,56 +32,26 @@ logging.basicConfig(
     ],
 )
 
-EMBEDDIM = 768
 DATANAME = f"medindcls_{args.doclevel}" if args.data == "MIC" else "csc"
-# DATANAME = f"medindcls_{args.bertmodel}_{args.doclevel}" if args.data == "MIC" else "csc"
 
 tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
+model = AutoModelForSequenceClassification.from_pretrained(PRETRAINEDMODEL)
+embed_dim = model.bert.embeddings.word_embeddings.embedding_dim
+del model
 
-if args.data == "MIC":
-    dataset_file = Path("data") / f"medindcls_gbert_{args.doclevel}_clean.json"
-    # dataset_file = Path("data") / f"medindcls_gbert_{args.doclevel}_clean.json"
-    if not dataset_file.exists():
-        logging.info("Creating dataset")
-        dataset = CleanClinicDataset(
-            tokenizer=tokenizer, task="MIC", doclevel=args.doclevel, clean=True
-        )
-        with open(dataset_file, "wb") as f:
-            logging.info(f"Saving dataset under {dataset_file}")
-            pickle.dump(dataset, f)
-    else:
-        logging.info(f"Loading dataset from: {dataset_file}")
-        with open(dataset_file, "rb") as f:
-            dataset = pickle.load(f)
-elif args.data == "CSC":
-    train_dataset_file = Path("data") / f"{DATANAME}_train_bert_clean.json"
-    test_dataset_file = Path("data") / f"{DATANAME}_test_bert_clean.json"
-
-    if not train_dataset_file.exists():
-        logging.info("Creating train dataset")
-        train_dataset = CleanClinicDataset(
-            tokenizer=tokenizer, task="CSC", clean=True, mode="train"
-        )
-        with open(train_dataset_file, "wb") as f:
-            logging.info(f"Saving dataset under {train_dataset_file}")
-            pickle.dump(train_dataset, f)
-    else:
-        logging.info(f"Loading train dataset from: {train_dataset_file}")
-        with open(train_dataset_file, "rb") as f:
-            train_dataset = pickle.load(f)
-    if not test_dataset_file.exists():
-        logging.info("Creating test dataset")
-        test_dataset = CleanClinicDataset(
-            tokenizer=tokenizer, task="CSC", clean=True, mode="test"
-        )
-        with open(test_dataset_file, "wb") as f:
-            logging.info(f"Saving dataset under {test_dataset_file}")
-            pickle.dump(test_dataset, f)
-    else:
-        logging.info(f"Loading test dataset from: {test_dataset_file}")
-        with open(test_dataset_file, "rb") as f:
-            test_dataset = pickle.load(f)
-    dataset = train_dataset
+dataset_file = Path("data") / f"medindcls_medbert_{args.doclevel}_clean.pkl"
+if not dataset_file.exists():
+    logging.info("Creating dataset")
+    dataset = CleanClinicDataset(
+        tokenizer=tokenizer, doclevel=args.doclevel, clean=True
+    )
+    with open(dataset_file, "wb") as f:
+        logging.info(f"Saving dataset under {dataset_file}")
+        pickle.dump(dataset, f)
+else:
+    logging.info(f"Loading dataset from: {dataset_file}")
+    with open(dataset_file, "rb") as f:
+        dataset = pickle.load(f)
 
 if args.data == "MIC":
     if not args.testunklar:
@@ -184,15 +155,15 @@ for r in range(10):
     label_list = dataset.LE.classes_
 
     train_size = len(train_dataset)
-    x = csr_matrix((train_size, EMBEDDIM), dtype=np.float)
+    x = csr_matrix((train_size, embed_dim), dtype=np.float)
     y = dataset.ohe_labels[train_dataset.indices]
 
     val_size = len(val_dataset)
-    vx = csr_matrix((val_size, EMBEDDIM), dtype=np.float)
+    vx = csr_matrix((val_size, embed_dim), dtype=np.float)
     vy = dataset.ohe_labels[val_dataset.indices]
 
     test_size = len(test_dataset)
-    tx = csr_matrix((test_size, EMBEDDIM), dtype=np.float)
+    tx = csr_matrix((test_size, embed_dim), dtype=np.float)
     if args.data == "MIC":
         ty = dataset.ohe_labels[test_dataset.indices]
     elif args.data == "CSC":
@@ -200,7 +171,7 @@ for r in range(10):
     elif args.data == "Patho":
         pass
 
-    allx = csr_matrix((train_size + vocab_size, EMBEDDIM), dtype=np.float)
+    allx = csr_matrix((train_size + vocab_size, embed_dim), dtype=np.float)
     ally = np.concatenate((y.toarray(), np.zeros((vocab_size, len(label_list)))))
 
     logging.info(

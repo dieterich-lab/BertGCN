@@ -9,13 +9,13 @@ import dgl
 import numpy as np
 import torch
 import torch.utils.data as Data
+from ferret import Benchmark
+from ferret.explainers.gradient import IntegratedGradientExplainer
 from torch.utils.data import Subset
 from transformers import AutoTokenizer
 
 from clinic_datasets import CleanClinicDataset
 from entry import *
-from ferret import Benchmark
-from ferret.explainers.gradient import IntegratedGradientExplainer
 from model import BertGCN
 from params import parse_args
 from utils import *

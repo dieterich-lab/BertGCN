@@ -12,7 +12,6 @@ import scipy as sp
 import shap
 import torch
 import torch.utils.data as Data
-from utils import *
 from captum.attr import IntegratedGradients
 from torch.utils.data import Subset
 from transformers import AutoTokenizer
@@ -21,6 +20,7 @@ from clinic_datasets import CleanClinicDataset
 from entry import *
 from model import BertGCN
 from params import parse_args
+from utils import *
 
 logging.getLogger("shap").setLevel(logging.WARNING)
 logging.getLogger("matplotlib").setLevel(logging.WARNING)
@@ -61,7 +61,9 @@ if args.data == "MIC":
     dataset_file = Path("data") / f"medindcls_{args.bertmodel}_{args.doclevel}.json"
     if not dataset_file.exists():
         print("Creating dataset")
-        dataset = CleanClinicDataset(tokenizer=tokenizer, task="MIC", doclevel=args.doclevel, clean=False)
+        dataset = CleanClinicDataset(
+            tokenizer=tokenizer, task="MIC", doclevel=args.doclevel, clean=False
+        )
         with open(dataset_file, "wb") as f:
             print(f"Saving dataset under {dataset_file}")
             pickle.dump(dataset, f)
@@ -75,7 +77,9 @@ elif args.data == "CSC":
 
     if not train_dataset_file.exists():
         print("Creating train dataset")
-        train_dataset = CleanClinicDataset(tokenizer=tokenizer, task="CSC", clean=False, mode="train")
+        train_dataset = CleanClinicDataset(
+            tokenizer=tokenizer, task="CSC", clean=False, mode="train"
+        )
         with open(train_dataset_file, "wb") as f:
             print(f"Saving dataset under {train_dataset_file}")
             pickle.dump(train_dataset, f)
@@ -85,7 +89,9 @@ elif args.data == "CSC":
             train_dataset = pickle.load(f)
     if not test_dataset_file.exists():
         print("Creating test dataset")
-        test_dataset = CleanClinicDataset(tokenizer=tokenizer, task="CSC", clean=False, mode="test")
+        test_dataset = CleanClinicDataset(
+            tokenizer=tokenizer, task="CSC", clean=False, mode="test"
+        )
         with open(test_dataset_file, "wb") as f:
             print(f"Saving dataset under {test_dataset_file}")
             pickle.dump(test_dataset, f)
@@ -138,7 +144,9 @@ elif args.data == "CSC":
     random.shuffle(idx)
     train_idx, val_idx = idx[: int(len(idx) * 0.9)], idx[int(len(idx) * 0.9) :]
 
-adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask, _, _ = load_corpus(DATASETPATH)
+adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask, _, _ = (
+    load_corpus(DATASETPATH)
+)
 
 nb_node = features.shape[0]
 nb_train, nb_val, nb_test = train_mask.sum(), val_mask.sum(), test_mask.sum()
@@ -169,24 +177,40 @@ doc_mask = train_mask + val_mask + test_mask
 if args.data == "MIC":
     input_ids = torch.cat(
         [
-            torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[train_idx]])),
+            torch.tensor(
+                np.array(
+                    [x["input_ids"] for x in np.array(dataset.examples)[train_idx]]
+                )
+            ),
             torch.zeros((nb_word, tokenizer.model_max_length), dtype=torch.long),
-            torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[val_idx]])),
-            torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[test_idx]])),
+            torch.tensor(
+                np.array([x["input_ids"] for x in np.array(dataset.examples)[val_idx]])
+            ),
+            torch.tensor(
+                np.array([x["input_ids"] for x in np.array(dataset.examples)[test_idx]])
+            ),
         ]
     )
 elif args.data == "CSC":
     input_ids = torch.cat(
         [
-            torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[train_idx]])),
+            torch.tensor(
+                np.array(
+                    [x["input_ids"] for x in np.array(dataset.examples)[train_idx]]
+                )
+            ),
             torch.zeros((nb_word, tokenizer.model_max_length), dtype=torch.long),
-            torch.tensor(np.array([x["input_ids"] for x in np.array(dataset.examples)[val_idx]])),
+            torch.tensor(
+                np.array([x["input_ids"] for x in np.array(dataset.examples)[val_idx]])
+            ),
             torch.tensor(np.array([x["input_ids"] for x in test_dataset.examples])),
         ]
     )
 
 assert np.array_equal(y[:nb_train], dataset.labels[train_idx])
-assert np.array_equal(y[nb_train + nb_word : nb_train + nb_word + nb_val], dataset.labels[val_idx])
+assert np.array_equal(
+    y[nb_train + nb_word : nb_train + nb_word + nb_val], dataset.labels[val_idx]
+)
 if args.data == "MIC":
     assert np.array_equal(y[-nb_test:], dataset.labels[test_idx])
 elif args.data == "CSC":
@@ -195,8 +219,12 @@ elif args.data == "CSC":
 adj_norm = normalize_adj(adj + sp.eye(adj.shape[0]))
 
 train_idx_dataset = Data.TensorDataset(torch.arange(0, nb_train, dtype=torch.long))
-val_idx_dataset = Data.TensorDataset(torch.arange(nb_train + nb_word, nb_train + nb_word + nb_val, dtype=torch.long))
-test_idx_dataset = Data.TensorDataset(torch.arange(nb_node - nb_test, nb_node, dtype=torch.long))
+val_idx_dataset = Data.TensorDataset(
+    torch.arange(nb_train + nb_word, nb_train + nb_word + nb_val, dtype=torch.long)
+)
+test_idx_dataset = Data.TensorDataset(
+    torch.arange(nb_node - nb_test, nb_node, dtype=torch.long)
+)
 
 idx_loader_train = Data.DataLoader(train_idx_dataset, batch_size=BATCHSIZE)
 idx_loader_val = Data.DataLoader(val_idx_dataset, batch_size=BATCHSIZE)
@@ -216,7 +244,9 @@ graph.ndata["cls_feats"] = torch.zeros((nb_node, model.feat_dim))
 
 def update_feature():
     global graph, model
-    dataloader = Data.DataLoader(Data.TensorDataset(graph.ndata["input_ids"][doc_mask]), batch_size=64)
+    dataloader = Data.DataLoader(
+        Data.TensorDataset(graph.ndata["input_ids"][doc_mask]), batch_size=64
+    )
     with torch.no_grad():
         model.eval()
         cls_list = []
@@ -249,13 +279,17 @@ def shap_forward(node_mask, graph, target_id2, doc_feats):
         doc_feats = [doc_feats.detach().cpu().numpy() * m[:, None] for m in node_mask]
         doc_feats = [torch.tensor(x) for x in doc_feats]
         doc_feats = torch.cat(doc_feats).to(device)
-        outputs = model.explain_forward(doc_feats, graph, target_id2, doc_mask, args.interpret_mode)
+        outputs = model.explain_forward(
+            doc_feats, graph, target_id2, doc_mask, args.interpret_mode
+        )
         return torch.softmax(outputs, dim=-1).detach().cpu().numpy()
 
 
 def ig_forward(doc_feats, graph, target_id2):
     graph = graph.to(device)
-    return model.explain_forward(doc_feats, graph, target_id2, doc_mask, args.interpret_mode)
+    return model.explain_forward(
+        doc_feats, graph, target_id2, doc_mask, args.interpret_mode
+    )
 
 
 doc_feats = graph.ndata["cls_feats"][doc_mask].requires_grad_().to(device)
@@ -276,9 +310,14 @@ for target_id1 in range(test_mask.sum()):
     target_cls = dataset.LE.classes_[target_label]
 
     logging.info("Computing IG attributions ...")
-    ig_explainer = IntegratedGradients(partial(ig_forward, graph=graph, target_id2=target_id2))
+    ig_explainer = IntegratedGradients(
+        partial(ig_forward, graph=graph, target_id2=target_id2)
+    )
     ig_attr, delta = ig_explainer.attribute(
-        doc_feats, target=target_label, internal_batch_size=graph.num_nodes(), return_convergence_delta=True
+        doc_feats,
+        target=target_label,
+        internal_batch_size=graph.num_nodes(),
+        return_convergence_delta=True,
     )
     ig_attr = ig_attr.sum(dim=-1)
     ig_attr = ig_attr / torch.norm(ig_attr)
@@ -288,7 +327,9 @@ for target_id1 in range(test_mask.sum()):
     if args.data != "CSC":
         logging.info("Computing SHAP values ...")
         shap_explainer = shap.explainers.Permutation(
-            partial(shap_forward, graph=graph, target_id2=target_id2, doc_feats=doc_feats),
+            partial(
+                shap_forward, graph=graph, target_id2=target_id2, doc_feats=doc_feats
+            ),
             zero_masker,
             max_evals=MAXEVALS,
         )
