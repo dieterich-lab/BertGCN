@@ -14,6 +14,7 @@ from transformers import AutoTokenizer
 from clinic_datasets import CleanClinicDataset
 from config import PRETRAINEDMODEL, get_paths, set_random_seeds
 from data_manager import load_graph_files
+from graph_utils import load_corpus, normalize_adj
 from model import BertGCN
 
 
