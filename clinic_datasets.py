@@ -1,6 +1,7 @@
 from pathlib import Path
-from typing import Optional, Union
+from typing import List, Optional, Union
 
+import numpy as np
 import pandas as pd
 from datasets import ClassLabel, Dataset, Features, Value
 from nltk.corpus import stopwords
@@ -92,6 +93,10 @@ class CleanClinicDataset:
         processed_texts = [self._get_text(row) for row in self.dataset]
         self.dataset = self.dataset.add_column("processed_text", processed_texts)
 
+        # Add raw texts for graph building (needed for vocabulary extraction)
+        raw_texts = [self._get_raw_text(row) for row in self.dataset]
+        self.dataset = self.dataset.add_column("raw_text", raw_texts)
+
         # Tokenize with caching
         self.dataset = self.dataset.map(
             self._tokenize_function,
@@ -99,7 +104,8 @@ class CleanClinicDataset:
             remove_columns=[
                 col
                 for col in self.dataset.column_names
-                if col not in ["label_id", "med_id", "input_ids", "attention_mask"]
+                if col
+                not in ["label_id", "med_id", "input_ids", "attention_mask", "raw_text"]
             ],
         )
 
@@ -116,6 +122,15 @@ class CleanClinicDataset:
             text = " ".join(
                 word for word in text.split() if word.lower() not in STOPWORDS
             )
+
+        return text
+
+    def _get_raw_text(self, row: dict) -> str:
+        """Get raw text for graph building (no cleaning, just medication concatenation)."""
+        text = row[self.doclevel_column]
+
+        if not self.nomeds:
+            text = f"Medikament {row['medication_name']} & {text}"
 
         return text
 
@@ -147,6 +162,20 @@ class CleanClinicDataset:
             type="torch", columns=["input_ids", "attention_mask", "label_id", "med_id"]
         )
         return self.dataset
+
+    @property
+    def texts(self) -> List[str]:
+        """Get raw texts for graph building."""
+        return self.dataset["raw_text"]
+
+    @property
+    def ohe_labels(self) -> np.ndarray:
+        """Get one-hot encoded labels."""
+        import numpy as np
+        from sklearn.preprocessing import LabelBinarizer
+
+        lb = LabelBinarizer()
+        return lb.fit_transform(self.dataset["label_id"])
 
     def __str__(self) -> str:
         return self.file_path.stem
