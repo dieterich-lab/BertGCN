@@ -3,20 +3,14 @@
 Minimal Document-Word Graph Builder for Clinical Text Classification
 """
 
-import logging
 from dataclasses import dataclass
 from typing import Dict, Tuple
 
 from scipy.sparse import csr_matrix
 from transformers import AutoTokenizer
 
-from data_manager import (
-    create_data_matrices,
-    get_embedding_dim,
-    load_or_create_dataset,
-    save_graph_files,
-)
-from entry import PRETRAINEDMODEL
+from config import PRETRAINEDMODEL
+from data_manager import get_embedding_dim, load_or_create_dataset
 from graph_algorithms import (
     build_adjacency_matrix,
     build_vocabulary,
@@ -26,7 +20,6 @@ from graph_algorithms import (
     create_splits,
     generate_windows,
 )
-from params import parse_args
 
 
 @dataclass
@@ -111,34 +104,3 @@ def build_graph(doclevel: str, testunklar: bool = False) -> Tuple[csr_matrix, Di
     }
 
     return adj_matrix, metadata, dataset
-
-
-def main():
-    """Main function."""
-    args = parse_args()
-
-    logging.basicConfig(format="%(asctime)s - %(message)s", level=logging.INFO)
-
-    # Build graph
-    adj_matrix, metadata, dataset = build_graph(args.doclevel, args.testunklar)
-
-    # Save graph data
-    data_matrices = create_data_matrices(dataset, metadata, metadata["embed_dim"])
-    dataset_name = f"medindcls_{args.doclevel}"
-    save_graph_files(
-        adj_matrix,
-        data_matrices,
-        metadata,
-        dataset_name,
-        args.doclevel,
-        args.testunklar,
-    )
-
-    print(f"Graph built: {metadata['node_size']} nodes, {adj_matrix.nnz} edges")
-    print(
-        f"Train/Val/Test: {metadata['train_size']}/{metadata['val_size']}/{metadata['test_size']}"
-    )
-
-
-if __name__ == "__main__":
-    main()

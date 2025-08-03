@@ -11,9 +11,7 @@ from torch.utils.data import DataLoader, Subset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from clinic_datasets import CleanClinicDataset
-from config import get_paths
-from entry import PRETRAINEDMODEL
-from params import parse_args
+from config import PRETRAINEDMODEL, get_paths, set_random_seeds
 
 
 class BertClassifier(pl.LightningModule):
@@ -50,8 +48,20 @@ class BertClassifier(pl.LightningModule):
         return torch.optim.AdamW(self.parameters(), lr=5e-5)
 
 
-def main():
-    args = parse_args()
+def main(args=None):
+    if args is None:
+        # Fallback for direct execution
+        class Args:
+            doclevel = "letter"
+            nepochs = 50
+            batchsize = 1
+            clean = True
+            noarznei = False
+            testonly = False
+
+        args = Args()
+
+    set_random_seeds(42)
     pl.seed_everything(42)
     paths = get_paths()
 

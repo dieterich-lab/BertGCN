@@ -1,646 +1,198 @@
-import datetime
-import logging
-import os
+#!/usr/bin/env python3
+"""Minimal BertGCN Training for Clinical Text Classification"""
+
 import pickle
-import random
-from pathlib import Path
 
-import dgl
-import optuna
-import pandas as pd
+import pytorch_lightning as pl
 import torch
-import torch.utils.data as Data
-from ignite.engine import Engine, Events
-from ignite.handlers import Checkpoint, EarlyStopping, ModelCheckpoint
-
-# from ignite.handlers.param_scheduler import LRScheduler, create_lr_scheduler_with_warmup
-from ignite.metrics import Accuracy, ClassificationReport, Loss, Precision, Recall
-from ignite.metrics.confusion_matrix import ConfusionMatrix
-from ignite.utils import setup_logger
-from torch.optim.lr_scheduler import ExponentialLR, ReduceLROnPlateau
+import torch.nn.functional as F
+from sklearn.metrics import classification_report, f1_score
+from torch_geometric.data import Data
+from torch_geometric.utils import from_scipy_sparse_matrix
 from transformers import AutoTokenizer
 
 from clinic_datasets import CleanClinicDataset
-from entry import *
-from metrics import SklearnClassificationReport
+from config import PRETRAINEDMODEL, get_paths, set_random_seeds
+from data_manager import load_graph_files
 from model import BertGCN
-from params import parse_args
-from utils import *
 
-args = parse_args()
 
-random.seed(0)
-np.random.seed(0)
-torch.manual_seed(0)
+class BertGCNTrainer(pl.LightningModule):
+    def __init__(self, model, num_classes, lr_bert=1e-5, lr_gcn=1e-4):
+        super().__init__()
+        self.model = model
+        self.num_classes = num_classes
+        self.lr_bert = lr_bert
+        self.lr_gcn = lr_gcn
+        self.val_preds, self.val_labels = [], []
 
-# BERTLR = 1e-6
-BERTLR = 1e-5
-GCNLR = 1e-4
-BATCHSIZE = 8
-NEPOCHS = args.nepochs
-# ACCUSTEPS = 1
-ACCUSTEPS = 8
-LOGINTERVALL = 100
+    def forward(self, graph, idx):
+        return self.model(graph, idx)
 
-MODELNAME = Path(PRETRAINEDMODEL).stem
-if args.data == "MIC":
-    DATASET = "med_indication_all_RF_diag"
-    if args.testunklar:
-        DATASETPATH = Path("data") / f"ind.{DATASET}_{args.doclevel}_testunklar"
-    else:
-        DATASETPATH = Path("data") / f"ind.{DATASET}_{args.doclevel}"
-    BERTSAVEDIR = Path(f"models/finetuned/{args.doclevel}")
-    if args.testunklar:
-        BERTPATH = Path(
-            f"{BERTSAVEDIR}/{MODELNAME}_med_indication_all_RF_diag_testunklar_best.pt"
+    def training_step(self, batch, batch_idx):
+        graph, train_idx, y_train = batch
+        y_pred = self.model(graph, train_idx)
+        loss = F.cross_entropy(y_pred, y_train)
+        self.log("train_loss", loss, prog_bar=True)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        graph, val_idx, y_val = batch
+        y_pred = self.model(graph, val_idx)
+        loss = F.cross_entropy(y_pred, y_val)
+        preds = torch.argmax(y_pred, dim=1)
+        self.val_preds.append(preds)
+        self.val_labels.append(y_val)
+        self.log("val_loss", loss, prog_bar=True)
+        return loss
+
+    def on_validation_epoch_end(self):
+        if self.val_preds:
+            all_preds = torch.cat(self.val_preds).cpu().numpy()
+            all_labels = torch.cat(self.val_labels).cpu().numpy()
+            f1 = f1_score(all_labels, all_preds, average="macro", zero_division=0)
+            self.log("val_f1", f1, prog_bar=True)
+            self.val_preds.clear()
+            self.val_labels.clear()
+
+    def test_step(self, batch, batch_idx):
+        graph, test_idx, y_test = batch
+        y_pred = self.model(graph, test_idx)
+        preds = torch.argmax(y_pred, dim=1)
+        return {"preds": preds, "labels": y_test}
+
+    def test_epoch_end(self, outputs):
+        preds = torch.cat([x["preds"] for x in outputs]).cpu().numpy()
+        labels = torch.cat([x["labels"] for x in outputs]).cpu().numpy()
+        print("\nTest Results:")
+        print(classification_report(labels, preds, zero_division=0))
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(
+            [
+                {"params": self.model.bert_model.parameters(), "lr": self.lr_bert},
+                {"params": self.model.classifier.parameters(), "lr": self.lr_bert},
+                {"params": self.model.gcn.parameters(), "lr": self.lr_gcn},
+            ]
         )
-    else:
-        BERTPATH = Path(f"{BERTSAVEDIR}/{MODELNAME}_med_indication_all_RF_diag_best.pt")
-elif args.data == "CSC":
-    DATASET = "CARDIODE400_main"
-    DATASETPATH = Path("data") / f"ind.{DATASET}"
-    BERTPATH = Path("models/finetuned/gbert-base_CARDIODE400_main_best.pt")
 
-tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+def create_graph_data(adj_matrix, features, labels, train_mask, val_mask, test_mask):
+    """Create PyTorch Geometric data object."""
+    edge_index, edge_weight = from_scipy_sparse_matrix(adj_matrix)
 
-now = datetime.datetime.now()
-now_str = now.strftime("%Y-%m-%d_%H:%M")
+    return Data(
+        x=features,
+        edge_index=edge_index,
+        edge_attr=edge_weight,
+        y=labels,
+        train_mask=train_mask,
+        val_mask=val_mask,
+        test_mask=test_mask,
+    )
 
-LOGPATH = Path("logs") / "gcn" / args.data
-os.makedirs(LOGPATH, exist_ok=True)
 
-handlers = [
-    logging.FileHandler(LOGPATH / f"{now_str}.log", mode="w"),
-    logging.StreamHandler(),
-]
+def main(args=None):
+    if args is None:
+        # Fallback for direct execution
+        class Args:
+            doclevel = "letter"
+            nepochs = 50
+            mixfactor = 0.7
+            clean = True
+            testunklar = False
+            testonly = False
 
-logging.basicConfig(
-    format=f"%(asctime)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    level=logging.INFO,
-    handlers=handlers,
-)
+        args = Args()
 
-logging.info(
-    f"BERT learning rate {BERTLR}, GCN learning rate {GCNLR}, Batch size {BATCHSIZE} Accu steps {ACCUSTEPS}"
-)
+    set_random_seeds(42)
+    pl.seed_everything(42)
+    paths = get_paths()
 
-logging.info(f"{'=== Params ===':>32}")
-for k, v in vars(args).items():
-    logging.info(f"{k:>25} : {str(v):<25}")
+    # Load dataset
+    tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
+    dataset_file = paths.get_dataset_path(args.doclevel, "medbert", clean=args.clean)
 
-optuna.logging.enable_propagation()
-optuna.logging.disable_default_handler()
-
-if args.data == "MIC":
-    dataset_file = Path("data") / f"medindcls_{args.bertmodel}_{args.doclevel}.json"
-    if not dataset_file.exists():
-        print("Creating dataset")
-        dataset = CleanClinicDataset(
-            tokenizer=tokenizer, task="MIC", doclevel=args.doclevel, clean=False
-        )
-        with open(dataset_file, "wb") as f:
-            print(f"Saving dataset under {dataset_file}")
-            pickle.dump(dataset, f)
-    else:
-        print(f"Loading dataset from: {dataset_file}")
+    if dataset_file.exists():
         with open(dataset_file, "rb") as f:
             dataset = pickle.load(f)
-elif args.data == "CSC":
-    train_dataset_file = Path("data") / "csc_train_bert.json"
-    test_dataset_file = Path("data") / "csc_test_bert.json"
-
-    if not train_dataset_file.exists():
-        print("Creating train dataset")
-        train_dataset = CleanClinicDataset(
-            tokenizer=tokenizer, task="CSC", clean=False, mode="train"
-        )
-        with open(train_dataset_file, "wb") as f:
-            print(f"Saving dataset under {train_dataset_file}")
-            pickle.dump(train_dataset, f)
     else:
-        print(f"Loading train dataset from: {train_dataset_file}")
-        with open(train_dataset_file, "rb") as f:
-            train_dataset = pickle.load(f)
-    if not test_dataset_file.exists():
-        print("Creating test dataset")
-        test_dataset = CleanClinicDataset(
-            tokenizer=tokenizer, task="CSC", clean=False, mode="test"
-        )
-        with open(test_dataset_file, "wb") as f:
-            print(f"Saving dataset under {test_dataset_file}")
-            pickle.dump(test_dataset, f)
-    else:
-        print(f"Loading test dataset from: {test_dataset_file}")
-        with open(test_dataset_file, "rb") as f:
-            test_dataset = pickle.load(f)
-    dataset = train_dataset
+        dataset = CleanClinicDataset(tokenizer, args.doclevel, clean=args.clean)
+        with open(dataset_file, "wb") as f:
+            pickle.dump(dataset, f)
 
-GCNNAME = f"{MODELNAME}_{dataset}.pt"
-if args.testunklar:
-    GCNNAME = f"{MODELNAME}_{dataset}_testunklar.pt"
-
-if args.data == "MIC":
-    SAVEDIR = Path(f"models/gcn/{args.mixfactor}/{args.doclevel}")
-    os.makedirs(SAVEDIR, exist_ok=True)
-    GCNSAVEPATH = SAVEDIR / GCNNAME
-elif args.data == "CSC":
-    SAVEDIR = Path(f"models/gcn/{args.mixfactor}")
-    os.makedirs(SAVEDIR, exist_ok=True)
-    GCNSAVEPATH = SAVEDIR / GCNNAME
-
-if args.data == "MIC":
-    if not args.testunklar:
-        if not args.cv:
-            idx = np.arange(len(dataset))
-            random.shuffle(idx)
-            train_idx, val_idx, test_idx = (
-                idx[: int(len(idx) * 0.7)],
-                idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
-                idx[int(len(idx) * 0.8) :],
-            )
-        else:
-            train_idxx, val_idxx, test_idxx = list(), list(), list()
-            # random.seed(0)
-            # np.random.seed(0)
-            # torch.manual_seed(0)
-            for i in range(10):
-                idx = np.arange(len(dataset))
-                random.shuffle(idx)
-                train_idx, val_idx, test_idx = (
-                    idx[: int(len(idx) * 0.7)],
-                    idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
-                    idx[int(len(idx) * 0.8) :],
-                )
-                train_idxx.append(train_idx)
-                val_idxx.append(val_idx)
-                test_idxx.append(test_idx)
-    else:
-        _train_idx, test_idx = list(), list()
-        for i, x in enumerate(dataset):
-            if "unklar" in dataset.LE.classes_[x["labels"]]:
-                test_idx.append(i)
-            else:
-                _train_idx.append(i)
-        random.shuffle(_train_idx)
-        train_idx, val_idx = (
-            _train_idx[: int(len(_train_idx) * 0.9)],
-            _train_idx[int(len(_train_idx) * 0.9) :],
-        )
-        assert len(train_idx) + len(val_idx) == len(_train_idx)
-elif args.data == "CSC":
-    idx = np.arange(len(train_dataset))
-    random.shuffle(idx)
-    train_idx, val_idx = idx[: int(len(idx) * 0.9)], idx[int(len(idx) * 0.9) :]
-    idx = np.arange(len(train_dataset))
-    random.shuffle(idx)
-    train_idx, val_idx = idx[: int(len(idx) * 0.9)], idx[int(len(idx) * 0.9) :]
-
-
-def run(trial, i=None):
-    global DATASETPATH, BERTPATH, SAVEDIR, GCNSAVEPATH, train_idx, val_idx, test_idx
-    _DATASETPATH, _BERTPATH, _SAVEDIR, _GCNSAVEPATH = (
-        DATASETPATH,
-        BERTPATH,
-        SAVEDIR,
-        GCNSAVEPATH,
+    # Load graph data
+    dataset_name = f"medindcls_{args.doclevel}"
+    graph_dir = paths.get_graph_path(dataset_name, args.doclevel, args.testunklar)
+    adj_matrix, features, labels, train_mask, val_mask, test_mask = load_graph_files(
+        graph_dir, dataset_name, args.doclevel, args.testunklar
     )
-    if i is not None:
-        DATASETPATH = DATASETPATH.parent / str(i) / DATASETPATH.name
-        BERTPATH = BERTPATH.parent / str(i) / BERTPATH.name
-        GCNSAVEPATH = GCNSAVEPATH.parent / str(i) / GCNSAVEPATH.name
-        SAVEDIR /= str(i)
-    (
-        adj,
-        features,
-        y_train,
-        y_val,
-        y_test,
-        train_mask,
-        val_mask,
-        test_mask,
-        _,
-        _,
-    ) = load_corpus(DATASETPATH)
 
-    nb_node = features.shape[0]
-    nb_train, nb_val, nb_test = train_mask.sum(), val_mask.sum(), test_mask.sum()
-    nb_word = nb_node - nb_train - nb_val - nb_test
-    nb_class = y_train.shape[1]
-    nb_node = features.shape[0]
-    nb_train, nb_val, nb_test = train_mask.sum(), val_mask.sum(), test_mask.sum()
-    nb_word = nb_node - nb_train - nb_val - nb_test
-    nb_class = y_train.shape[1]
+    # Create PyTorch Geometric graph
+    graph_data = create_graph_data(
+        adj_matrix, features, labels, train_mask, val_mask, test_mask
+    )
 
+    # Initialize model
+    num_classes = len(dataset.LE.classes_)
     model = BertGCN(
-        nb_class=nb_class,
-        pretrained_model=PRETRAINEDMODEL,  # parameters will be overwritten with fine-tuned weights
+        nb_class=num_classes,
+        pretrained_model=PRETRAINEDMODEL,
         mix_factor=args.mixfactor,
-        # if trial in ["train", "test"]
-        # else trial.suggest_uniform("mix_factor", 0, 1),
         gcn_layers=2,
         n_hidden=200,
         dropout=0.5,
     )
 
-    if trial == "train":
-        logging.info(
-            f"Loading pretrained BERT model from {BERTPATH} saved on {datetime.datetime.fromtimestamp(BERTPATH.stat().st_ctime)}"
-        )
-        ckpt = torch.load(BERTPATH, map_location=device)
-        model.bert_model.load_state_dict(ckpt["bert_model"])
-        model.classifier.load_state_dict(ckpt["classifier"])
+    # Load fine-tuned BERT weights if available
+    bert_model_path = paths.get_model_path("bert", args.doclevel)
+    if bert_model_path.exists():
+        bert_ckpt = torch.load(list(bert_model_path.glob("*.ckpt"))[0])
+        model.bert_model.load_state_dict(bert_ckpt["state_dict"]["model.bert_model"])
+        model.classifier.load_state_dict(bert_ckpt["state_dict"]["model.classifier"])
 
-    # transform one-hot label to class ID for pytorch computation
-    y = y_train + y_test + y_val
-    y_train = y_train.argmax(axis=1)
-    y = y.argmax(axis=1)
+    # Create trainer
+    lightning_model = BertGCNTrainer(model, num_classes)
 
-    # document mask used for update feature
-    doc_mask = train_mask + val_mask + test_mask
+    save_dir = paths.get_model_path("gcn", args.doclevel, f"mixfactor_{args.mixfactor}")
 
-    # logging.info(f"Len idx: {len(train_idx)} {len(val_idx)} {len(test_idx)}")
-
-    if i is not None:
-        train_idx = train_idxx[i]
-        val_idx = val_idxx[i]
-        test_idx = test_idxx[i]
-
-    if args.data == "MIC":
-        input_ids = torch.cat(
-            [
-                torch.tensor(
-                    np.array(
-                        [x["input_ids"] for x in np.array(dataset.examples)[train_idx]]
-                    )
-                ),
-                torch.zeros((nb_word, tokenizer.model_max_length), dtype=torch.long),
-                torch.tensor(
-                    np.array(
-                        [x["input_ids"] for x in np.array(dataset.examples)[val_idx]]
-                    )
-                ),
-                torch.tensor(
-                    np.array(
-                        [x["input_ids"] for x in np.array(dataset.examples)[test_idx]]
-                    )
-                ),
-            ]
-        )
-        arznei = torch.cat(
-            [
-                torch.tensor(
-                    [x["arznei"] for x in np.array(dataset.examples)[train_idx]]
-                ),
-                torch.zeros((nb_word), dtype=torch.long),
-                torch.tensor(
-                    [x["arznei"] for x in np.array(dataset.examples)[val_idx]]
-                ),
-                torch.tensor(
-                    [x["arznei"] for x in np.array(dataset.examples)[test_idx]]
-                ),
-            ]
-        )
-    elif args.data == "CSC":
-        input_ids = torch.cat(
-            [
-                torch.tensor(
-                    np.array(
-                        [x["input_ids"] for x in np.array(dataset.examples)[train_idx]]
-                    )
-                ),
-                torch.zeros((nb_word, tokenizer.model_max_length), dtype=torch.long),
-                torch.tensor(
-                    np.array(
-                        [x["input_ids"] for x in np.array(dataset.examples)[val_idx]]
-                    )
-                ),
-                torch.tensor(np.array([x["input_ids"] for x in test_dataset.examples])),
-            ]
-        )
-
-    assert np.array_equal(y[:nb_train], dataset.labels[train_idx])
-    assert np.array_equal(
-        y[nb_train + nb_word : nb_train + nb_word + nb_val], dataset.labels[val_idx]
-    )
-    if args.data == "MIC":
-        assert np.array_equal(y[-nb_test:], dataset.labels[test_idx])
-    if args.data == "CSC":
-        assert np.array_equal(y[-nb_test:], test_dataset.labels)
-
-    # build DGL Graph
-    adj_norm = normalize_adj(adj + sp.eye(adj.shape[0]))
-
-    train_idx_dataset = Data.TensorDataset(torch.arange(0, nb_train, dtype=torch.long))
-    val_idx_dataset = Data.TensorDataset(
-        torch.arange(nb_train + nb_word, nb_train + nb_word + nb_val, dtype=torch.long)
-    )
-    test_idx_dataset = Data.TensorDataset(
-        torch.arange(nb_node - nb_test, nb_node, dtype=torch.long)
-    )
-
-    idx_loader_train = Data.DataLoader(train_idx_dataset, batch_size=BATCHSIZE)
-    idx_loader_val = Data.DataLoader(val_idx_dataset, batch_size=BATCHSIZE)
-    idx_loader_test = Data.DataLoader(test_idx_dataset, batch_size=BATCHSIZE)
-
-    optimizer = torch.optim.Adam(
-        [
-            {"params": model.bert_model.parameters(), "lr": BERTLR},
-            {"params": model.classifier.parameters(), "lr": BERTLR},
-            {
-                "params": model.gcn.parameters(),
-                "lr": (
-                    GCNLR
-                    if trial in ["train", "test"]
-                    else trial.suggest_uniform("gcnlr", 1e-5, 1e-3)
-                ),
-            },
+    trainer = pl.Trainer(
+        max_epochs=args.nepochs,
+        callbacks=[
+            pl.callbacks.ModelCheckpoint(save_dir, monitor="val_f1", mode="max"),
+            pl.callbacks.EarlyStopping(monitor="val_f1", patience=5, mode="max"),
         ],
-        lr=GCNLR,
+        enable_progress_bar=False,
     )
 
-    criterion = torch.nn.CrossEntropyLoss()
-
-    graph = dgl.from_scipy(adj_norm.astype("float32"), eweight_name="edge_weight")
-    graph.ndata["input_ids"] = input_ids
-    (
-        graph.ndata["label"],
-        graph.ndata["train"],
-        graph.ndata["val"],
-        graph.ndata["test"],
-    ) = (
-        torch.LongTensor(y),
-        torch.FloatTensor(train_mask),
-        torch.FloatTensor(val_mask),
-        torch.FloatTensor(test_mask),
-    )
-    graph.ndata["label_train"] = torch.LongTensor(y_train)
-    graph.ndata["cls_feats"] = torch.zeros((nb_node, model.feat_dim))
-    graph.ndata["arznei"] = arznei
-
-    def train_step(engine, batch):
-        nonlocal model, graph, optimizer, criterion
-        model.train()
-        model = model.to(device)
-        graph = graph.to(device)
-        (idx,) = [x.to(device) for x in batch]
-        train_mask = graph.ndata["train"][idx].type(torch.BoolTensor)
-        y_pred = model(graph, idx)[train_mask]
-        y_true = graph.ndata["label_train"][idx][train_mask]
-        loss = criterion(y_pred, y_true)
-        loss.backward()
-        if engine.state.iteration % ACCUSTEPS == 0:
-            optimizer.step()
-            optimizer.zero_grad()
-        graph.ndata["cls_feats"].detach_()
-        return loss.item()
-
-    def update_feature():
-        nonlocal graph, model
-        dataloader = Data.DataLoader(
-            Data.TensorDataset(graph.ndata["input_ids"][doc_mask]), batch_size=64
+    # Create data loaders (simplified - single graph approach)
+    train_data = [
+        (
+            graph_data,
+            graph_data.train_mask.nonzero().squeeze(),
+            graph_data.y[graph_data.train_mask],
         )
-        with torch.no_grad():
-            model = model.to(device)
-            model.eval()
-            cls_list = []
-            logging.info("Updating features...")
-            for batch in dataloader:
-                input_ids = [x.to(device) for x in batch][0]
-                output = model.bert_model(input_ids=input_ids)[0][:, 0]
-                cls_list.append(output.cpu())
-            cls_feat = torch.cat(cls_list, axis=0)
-        graph = graph.to("cpu")
-        graph.ndata["cls_feats"][doc_mask] = cls_feat
-
-    trainer = Engine(train_step)
-    trainer.logger = setup_logger("trainer", level=30)
-
-    scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
-
-    # torch_lr_scheduler = ExponentialLR(optimizer=optimizer, gamma=0.5)
-    # scheduler = LRScheduler(torch_lr_scheduler)
-    # trainer.add_event_handler(Events.EPOCH_COMPLETED, scheduler)
-    # scheduler = create_lr_scheduler_with_warmup(
-    #     torch_lr_scheduler, warmup_start_value=0.0, warmup_end_value=LR, warmup_duration=len(idx_loader_train)
-    # )
-    # combined_events = Events.ITERATION_STARTED(event_filter=lambda _, __: trainer.state.iteration <= len(idx_loader_train))
-    # combined_events |= Events.EPOCH_STARTED(event_filter=lambda _, __: trainer.state.epoch > 2)
-    # trainer.add_event_handler(combined_events, scheduler)
-    # scheduler = create_lr_scheduler_with_warmup(
-    #     torch_lr_scheduler, warmup_start_value=0.0, warmup_end_value=LR, warmup_duration=len(idx_loader_train)
-    # )
-
-    @trainer.on(Events.EPOCH_COMPLETED)
-    def reset_graph(trainer):
-        if not args.suppressupdates:
-            update_feature()
-        torch.cuda.empty_cache()
-
-    def eval_step(engine, batch):
-        nonlocal model, graph
-        with torch.no_grad():
-            model.eval()
-            model = model.to(device)
-            graph = graph.to(device)
-            (idx,) = [x.to(device) for x in batch]
-            y_pred = model(graph, idx)
-            y_true = graph.ndata["label"][idx]
-            arznei = graph.ndata["arznei"][idx]
-            return y_pred, y_true, arznei
-
-    val_evaluator = Engine(eval_step)
-    val_evaluator.logger = setup_logger("val evaluator", level=30)
-
-    if trial not in ["train", "test"]:
-        pruning_handler = optuna.integration.PyTorchIgnitePruningHandler(
-            trial, "accuracy", trainer
+    ]
+    val_data = [
+        (
+            graph_data,
+            graph_data.val_mask.nonzero().squeeze(),
+            graph_data.y[graph_data.val_mask],
         )
-        val_evaluator.add_event_handler(Events.COMPLETED, pruning_handler)
-    if trial not in ["train", "test"]:
-        pruning_handler = optuna.integration.PyTorchIgnitePruningHandler(
-            trial, "accuracy", trainer
+    ]
+    test_data = [
+        (
+            graph_data,
+            graph_data.test_mask.nonzero().squeeze(),
+            graph_data.y[graph_data.test_mask],
         )
-        val_evaluator.add_event_handler(Events.COMPLETED, pruning_handler)
+    ]
 
-    test_evaluator = Engine(eval_step)
-    test_evaluator.logger = setup_logger("test evaluator", level=30)
-
-    precision = Precision(average="macro")
-    recall = Recall(average="macro")
-    F1 = precision * recall * 2 / (precision + recall)
-    test_evaluator = Engine(eval_step)
-    test_evaluator.logger = setup_logger("test evaluator", level=30)
-
-    metrics = {
-        "accuracy": Accuracy(),
-        "f1": F1,
-        "nll": Loss(criterion),
-        "cr": SklearnClassificationReport(target_names=dataset.LE.classes_),
-        "cr_dict": SklearnClassificationReport(
-            output_dict=True,
-            target_names=dataset.LE.classes_,
-        ),
-        "arzneireport": SklearnClassificationReport(
-            target_names=dataset.medsLE.classes_, arznei=True
-        ),
-        "cm": ConfusionMatrix(num_classes=len(dataset.LE.classes_)),
-    }
-
-    for n, f in metrics.items():
-        f.attach(val_evaluator, n)
-
-    for n, f in metrics.items():
-        f.attach(test_evaluator, n)
-
-    def score_function(engine):
-        return -1.0 * engine.state.metrics["nll"]
-
-    # val_evaluator.run(idx_loader_val)
-
-    # to_save = {'model': model, 'optimizer': optimizer, 'trainer': trainer}
-
-    # checkpoint = ModelCheckpoint(
-    #     to_save,
-    #     SAVEPATH,
-    #     n_saved=1,
-    #     filename_pattern=GCNNAME,
-    #     score_function=score_function,
-    #     score_name="accuracy",
-    #     global_step_transform=lambda *_: trainer.state.epoch,
-    #     require_empty=False,
-    # )
-
-    model_checkpoint = ModelCheckpoint(
-        SAVEDIR,
-        n_saved=1,
-        filename_pattern=GCNNAME,
-        score_function=score_function,
-        score_name="accuracy",
-        global_step_transform=lambda *_: trainer.state.epoch,
-        require_empty=False,
-    )
-
-    val_evaluator.add_event_handler(
-        Events.COMPLETED, model_checkpoint, {"model": model}
-    )
-
-    stopping_handler = EarlyStopping(
-        patience=args.patience, score_function=score_function, trainer=trainer
-    )
-    val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
-
-    # @trainer.on(Events.ITERATION_COMPLETED(every=LOGINTERVALL))
-    # def log_training_loss(engine):
-    #     logging.info(
-    #         f"Epoch[{engine.state.epoch}], Iter[{engine.state.iteration}] Loss: {engine.state.output[0]:.2f} Accuracy: {engine.state.output[1]:.2f}"
-    #     )
-
-    # @trainer.on(Events.EPOCH_COMPLETED)
-    # def log_training_results(trainer):
-    #     train_evaluator.run(idx_loader_train)
-    #     metrics = train_evaluator.state.metrics
-    #     logging.info(
-    #         f"Training Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
-    #     )
-
-    @trainer.on(Events.EPOCH_COMPLETED)
-    def log_validation_results(trainer):
-        val_evaluator.run(idx_loader_val)
-        metrics = val_evaluator.state.metrics
-        scheduler.step(metrics["nll"])
-        logging.info(
-            f"Validation Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
-        )
-
-    # @trainer.on(Events.COMPLETED
-    # def log_test_results(trainer):
-    #     test_evaluator.run(idx_loader_test)
-    #     metrics = test_evaluator.state.metrics
-    #     logging.info(
-    #         f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
-    #     )
-    #     logging.info(metrics["cr"])
-
-    if not (args.suppressupdates or trial == "test"):
-        update_feature()
-
-    if trial != "test":
-        trainer.run(idx_loader_train, max_epochs=NEPOCHS)
-        if trial != "train":  # optuna study object needs a return value
-            return val_evaluator.state.metrics["f1"]
-
-    logging.info(
-        f"Loading best gcn model from {GCNSAVEPATH} saved on {datetime.datetime.fromtimestamp(GCNSAVEPATH.stat().st_ctime)}"
-    )
-    model.load_state_dict(torch.load(GCNSAVEPATH))
-
-    # checkpoint = torch.load(GCNPATH, map_location=device)
-    # Checkpoint.load_objects(to_load=to_save, checkpoint=checkpoint)
-
-    if not args.suppressupdates:
-        update_feature()
-    test_evaluator.run(idx_loader_test)
-    metrics = test_evaluator.state.metrics
-    logging.info(
-        f"Test results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
-    )
-    logging.info(metrics["cr"])
-    # logging.info(metrics["arzneireport"])
-    logging.info(metrics["cm"])
-
-    report = metrics["cr_dict"]
-    df = pd.DataFrame(report).transpose()
-    df.to_csv(f"{SAVEDIR}/{args.bertmodel}_cr.csv")
-    # logging.info(df.to_latex(index=False, float_format="{:.2f}".format))
-    logging.info(metrics["cr"])
-    cm = metrics["cm"].detach().cpu().numpy()
-    with open(f"{SAVEDIR}/{args.bertmodel}_cm.npy", "wb") as f:
-        np.save(f, cm)
-
-    DATASETPATH, BERTPATH, SAVEDIR, GCNSAVEPATH = (
-        _DATASETPATH,
-        _BERTPATH,
-        _SAVEDIR,
-        _GCNSAVEPATH,
-    )
-    return metrics["accuracy"], metrics["f1"]
+    # Train and test
+    if not args.testonly:
+        trainer.fit(lightning_model, train_data, val_data)
+    trainer.test(lightning_model, test_data)
 
 
-def optimize():
-    study = optuna.create_study(direction="maximize")
-    study.optimize(run, n_trials=30)
-
-    print("Number of finished trials: ", len(study.trials))
-
-    print("Best trial:")
-    trial = study.best_trial
-
-    print("  Value: ", trial.value)
-
-    print("  Params: ")
-    for key, value in trial.params.items():
-        print("    {}: {}".format(key, value))
-
-
-if args.optimize:
-    optimize()
-else:
-    if not args.cv:
-        if args.testonly:
-            run("test")
-        else:
-            run("train")
-    else:
-        f1s, accs = list(), list()
-        for i in range(10):
-            if args.testonly:
-                acc, f1 = run("test", i)
-            else:
-                acc, f1 = run("train", i)
-            f1s.append(f1)
-            accs.append(acc)
-        logging.info(f"Mean F1 scores: {np.mean(f1s)}, Std: {np.std(f1s)}")
-        logging.info(f"Mean accuracies: {np.mean(accs)}, Std: {np.std(accs)}")
+if __name__ == "__main__":
+    main()

@@ -6,6 +6,39 @@ and project settings to ensure consistency across all components.
 """
 
 import os
+import random
+import warnings
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import torch
+
+# Suppress warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.simplefilter(action="ignore", category=FutureWarning)
+
+# Environment settings
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# Model configurations
+PRETRAINEDMODEL = "/prj/doctoral_letters/PETGUI/med_bert_local"
+
+DATADICT = {
+    "train": "/prj/doctoral_letters/MIEdeep/corpus/cardiode/24_final_hq/tsv/CARDIODE400_main",
+    "test": "/prj/doctoral_letters/MIEdeep/corpus/cardiode/24_final_hq/tsv/CARDIODE100_heldout",
+    "medindcls": "/prj/doctoral_letters/MIEdeep/corpus/annotated_gold500/med_indication_all_RF_diag.csv",
+}
+
+
+def set_random_seeds(seed: int = 0):
+    """Set random seeds for reproducibility."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
+import os
 from pathlib import Path
 from typing import Optional
 
