@@ -75,51 +75,198 @@ graph TB
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Python 3.8+
-- Docker & Docker Compose
-- Poetry (for dependency management)
-- Git
+- **Python 3.8+** 
+- **Poetry** ([installation guide](https://python-poetry.org/docs/#installation))
+- **Docker & Docker Compose** ([installation guide](https://docs.docker.com/get-docker/))
+- **Git**
 
-### 1. Clone and Setup
+### Automated Setup (Recommended)
+
+#### 1. Clone Repository
 ```bash
 git clone https://github.com/clinical-ai/bertgcn.git
 cd bertgcn
+```
 
+#### 2. Run Setup Verification
+```bash
+# Make setup script executable and run it
+chmod +x scripts/verify_setup.sh
+./scripts/verify_setup.sh
+
+# This will:
+# - Check all prerequisites
+# - Install dependencies with Poetry
+# - Start Docker services (PostgreSQL, Redis, MLflow)
+# - Verify CLI is working
+```
+
+#### 3. Alternative: Manual Setup
+```bash
 # Install dependencies
 make install
 
-# Setup development environment
+# Start development environment
+make setup
+
+# Verify everything is working
+make status
+```
+
+### Your First Training Pipeline
+
+#### 1. Build Document-Word Graph
+```bash
+# For clinical letters (replace with diagnosis, riskfactor, or anamnesis as needed)
+python cli.py build-graph --doclevel letter
+
+# This creates the heterogeneous graph structure
+```
+
+#### 2. Fine-tune BERT Model
+```bash
+# Fine-tune BERT on clinical text
+python cli.py finetune-bert --doclevel letter --nepochs 10 --clean
+
+# This creates a domain-adapted BERT model
+```
+
+#### 3. Train BertGCN Hybrid Model
+```bash
+# Train the hybrid BERT+GCN model
+python cli.py train-gcn --doclevel letter --nepochs 20 --mixfactor 0.7
+
+# This combines BERT embeddings with graph structure
+```
+
+### 🔍 Verification Steps
+
+After setup, verify everything works:
+
+```bash
+# 1. Check Docker services are running
+docker-compose ps
+
+# 2. Verify CLI is working
+python cli.py --help
+
+# 3. Check web interfaces
+# - MLflow: http://localhost:5000
+# - PostgreSQL: localhost:5432 (bertgcn/password)
+# - Redis: localhost:6379
+
+# 4. Run a quick test
+make test
+```
+
+### 🛠️ Development Workflow
+
+```bash
+# Start development environment
+make up
+
+# Check system status
+make status
+
+# Format and lint code
+make format
+make lint
+
+# Run tests
+make test
+
+# Clean up
+make down
+```
+
+### 🐛 Troubleshooting
+
+#### Common Issues:
+
+**Poetry not found:**
+```bash
+# Install Poetry
+curl -sSL https://install.python-poetry.org | python3 -
+source ~/.bashrc  # or restart terminal
+```
+
+**Docker services not starting:**
+```bash
+# Check Docker daemon
+docker info
+
+# Reset environment
+make down
+make clean
 make setup
 ```
 
-### 2. Train Your First Model
+**Port conflicts:**
 ```bash
-# Quick training with default settings
-make train
+# Check what's using the ports
+lsof -i :5000  # MLflow
+lsof -i :5432  # PostgreSQL  
+lsof -i :6379  # Redis
 
-# Advanced training with experiment tracking
-bertgcn train start --doclevel letter --nepochs 50 --experiment-name "clinical_bert_gcn_v1"
+# Stop conflicting services or modify docker-compose.yml
 ```
 
-### 3. Serve the Model
+**CLI not working:**
 ```bash
-# Start API server
-make serve
+# Check current project structure
+ls -la
 
-# Test the API
-curl -X POST "http://localhost:8000/predict" \
-     -H "Content-Type: application/json" \
-     -d '{"text": "Patient presents with chest pain and shortness of breath", "document_level": "letter"}'
+# If using old structure:
+python cli.py --help
+
+# If using new Poetry structure:
+poetry run bertgcn --help
 ```
 
-### 4. Monitor Performance
+**Permission errors on scripts:**
 ```bash
-# Start monitoring stack
-make monitor
+chmod +x scripts/*.sh
+```
 
-# View dashboards
-open http://localhost:3000  # Grafana
-open http://localhost:9090  # Prometheus
+### 📁 Project Structure After Setup
+```
+bertgcn/
+├── outputs/                    # Generated during training
+│   ├── data/
+│   │   ├── datasets/          # Processed clinical datasets
+│   │   └── graphs/            # Document-word graphs
+│   └── models/
+│       ├── finetuned/         # Fine-tuned BERT models  
+│       └── gcn/               # Trained GCN models
+├── src/bertgcn/              # Source code (if using Poetry structure)
+├── scripts/                  # Setup and utility scripts
+├── tests/                    # Test files
+├── configs/                  # Configuration files
+├── monitoring/               # Grafana/Prometheus configs
+└── cli.py                    # CLI interface (current structure)
+```
+
+## ❓ About utils.py
+
+**Yes, you can safely delete `utils.py`**. 
+
+This file has been deprecated and replaced by specialized modules:
+- `graph_utils.py` - Graph processing functions
+- `text_utils.py` - Text processing functions  
+- `config.py` - Configuration and path management
+
+All functions have been distributed to appropriate modules or are no longer needed in the modern codebase.
+
+### 🎯 Quick Test Example
+
+```bash
+# Complete end-to-end test
+python cli.py build-graph --doclevel letter
+python cli.py finetune-bert --doclevel letter --nepochs 3 --clean
+python cli.py train-gcn --doclevel letter --nepochs 5
+
+# Check results
+ls outputs/models/
 ```
 
 ## 📚 Documentation
