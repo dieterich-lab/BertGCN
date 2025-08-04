@@ -34,7 +34,6 @@ make setup
 
 **What this does:**
 - ✅ Installs all Python dependencies via Poetry
-- ✅ Sets up pre-commit hooks for code quality
 - ✅ Starts required Docker services (PostgreSQL, Redis, MLflow)
 - ✅ Configures the development environment
 

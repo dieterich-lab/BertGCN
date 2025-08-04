@@ -29,7 +29,6 @@ help: ## Show this help message
 install: ## Install dependencies with Poetry
 	@echo "$(BLUE)📦 Installing dependencies...$(NC)"
 	poetry install --with dev,monitoring
-	poetry run pre-commit install
 	@echo "$(GREEN)✅ Dependencies installed$(NC)"
 
 install-prod: ## Install production dependencies only
@@ -40,7 +39,6 @@ install-prod: ## Install production dependencies only
 setup: ## Setup development environment
 	@echo "$(BLUE)🔧 Setting up development environment...$(NC)"
 	poetry install --with dev,monitoring
-	poetry run pre-commit install
 	docker-compose -f docker-compose.yml up -d postgres redis mlflow
 	@echo "$(GREEN)✅ Development environment ready$(NC)"
 
@@ -249,11 +247,6 @@ ci: ## Run CI pipeline locally
 	make test
 	make build
 	@echo "$(GREEN)✅ CI pipeline completed$(NC)"
-
-pre-commit: ## Run pre-commit hooks
-	@echo "$(BLUE)🔍 Running pre-commit hooks...$(NC)"
-	poetry run pre-commit run --all-files
-	@echo "$(GREEN)✅ Pre-commit checks completed$(NC)"
 
 ## Performance
 benchmark: ## Run performance benchmarks
