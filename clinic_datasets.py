@@ -1,10 +1,18 @@
 from pathlib import Path
 from typing import Optional, Union
 
+import nltk
+import numpy as np
 import pandas as pd
 from datasets import ClassLabel, Dataset, Features, Value
 from nltk.corpus import stopwords
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+
+# Download NLTK data
+try:
+    nltk.data.find("corpora/stopwords")
+except LookupError:
+    nltk.download("stopwords")
 
 STOPWORDS = set(stopwords.words("german"))
 
@@ -53,6 +61,19 @@ class CleanClinicDataset:
         # Apply preprocessing pipeline
         self.dataset = self._preprocess_dataset()
 
+        # Create properties needed by build_graph.py
+        self.texts = [
+            self._get_text_from_processed(i) for i in range(len(self.dataset))
+        ]
+
+        # Create one-hot encoded labels
+        self.ohe = OneHotEncoder(sparse_output=False)
+        self.ohe_labels = self.ohe.fit_transform(
+            np.array(
+                [self.dataset[i]["label_id"] for i in range(len(self.dataset))]
+            ).reshape(-1, 1)
+        )
+
     def _create_dataset(self, dev_limit: Optional[int]) -> Dataset:
         """Load data and create HuggingFace Dataset."""
         df = pd.read_csv(
@@ -74,20 +95,28 @@ class CleanClinicDataset:
 
     def _preprocess_dataset(self) -> Dataset:
         """Apply all preprocessing steps to the dataset."""
+        # First get the raw data before encoding
+        raw_data = []
+        for i in range(len(self.dataset)):
+            row = self.dataset[i]
+            raw_data.append(row)
+
         # Encode labels
         combined_labels = [
-            f"{row['medication_type']}_{row['label']}" for row in self.dataset
+            f"{row['medication_type']}_{row['label']}" for row in raw_data
         ]
 
         label_ids = self.LE.fit_transform(combined_labels)
-        med_ids = self.medsLE.fit_transform(self.dataset["medication_name"])
+        med_ids = self.medsLE.fit_transform(
+            [row["medication_name"] for row in raw_data]
+        )
 
         # Add encoded labels to dataset
         self.dataset = self.dataset.add_column("label_id", label_ids)
         self.dataset = self.dataset.add_column("med_id", med_ids)
 
         # Add processed text
-        processed_texts = [self._get_text(row) for row in self.dataset]
+        processed_texts = [self._get_text(row) for row in raw_data]
         self.dataset = self.dataset.add_column("processed_text", processed_texts)
 
         # Tokenize with caching
@@ -97,7 +126,14 @@ class CleanClinicDataset:
             remove_columns=[
                 col
                 for col in self.dataset.column_names
-                if col not in ["label_id", "med_id", "input_ids", "attention_mask"]
+                if col
+                not in [
+                    "label_id",
+                    "med_id",
+                    "input_ids",
+                    "attention_mask",
+                    "processed_text",
+                ]
             ],
         )
 
@@ -115,6 +151,10 @@ class CleanClinicDataset:
             )
 
         return text
+
+    def _get_text_from_processed(self, idx: int) -> str:
+        """Get processed text from dataset by index."""
+        return self.dataset[idx]["processed_text"]
 
     def _tokenize_function(self, examples: dict) -> dict:
         """Tokenize texts efficiently in batches."""

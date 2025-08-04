@@ -5,6 +5,7 @@ import sys
 import networkx as nx
 import numpy as np
 import scipy.sparse as sp
+
 # from scipy.sparse.linalg.eigen.arpack import eigsh
 
 
@@ -140,7 +141,7 @@ def load_corpus(dataset_str):
     for i in range(len(names)):
         # dataset_file = dataset_str.parent / f"ind.{dataset_str.stem}"
         with open("{}.{}".format(dataset_str, names[i]), "rb") as f:
-        # with open("data/ind.{}.{}".format(dataset_str, names[i]), "rb") as f:
+            # with open("data/ind.{}.{}".format(dataset_str, names[i]), "rb") as f:
             if sys.version_info > (3, 0):
                 objects.append(pkl.load(f, encoding="latin1"))
             else:
@@ -183,7 +184,18 @@ def load_corpus(dataset_str):
 
     adj = adj + adj.T.multiply(adj.T > adj) - adj.multiply(adj.T > adj)
 
-    return adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask, train_size, test_size
+    return (
+        adj,
+        features,
+        y_train,
+        y_val,
+        y_test,
+        train_mask,
+        val_mask,
+        test_mask,
+        train_size,
+        test_size,
+    )
 
 
 def sparse_to_tuple(sparse_mx):
@@ -238,7 +250,9 @@ def construct_feed_dict(features, support, labels, labels_mask, placeholders):
     feed_dict.update({placeholders["labels"]: labels})
     feed_dict.update({placeholders["labels_mask"]: labels_mask})
     feed_dict.update({placeholders["features"]: features})
-    feed_dict.update({placeholders["support"][i]: support[i] for i in range(len(support))})
+    feed_dict.update(
+        {placeholders["support"][i]: support[i] for i in range(len(support))}
+    )
     feed_dict.update({placeholders["num_features_nonzero"]: features[1].shape})
     return feed_dict
 
@@ -306,3 +320,19 @@ def clean_str(string):
     string = re.sub(r"\?", " \? ", string)
     string = re.sub(r"\s{2,}", " ", string)
     return string.strip().lower()
+
+
+# Utility functions for BertGCN
+def load_data():
+    """Placeholder for data loading functionality"""
+    pass
+
+
+def normalize_adj(adj):
+    """Normalize adjacency matrix"""
+    pass
+
+
+def placeholder_function():
+    """Placeholder utility function."""
+    pass

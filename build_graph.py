@@ -8,16 +8,19 @@ from math import log
 from pathlib import Path
 
 import numpy as np
+import torch
 from scipy.sparse import csr_matrix
 from torch.utils.data import Subset
-from transformers import AutoTokenizer
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from clinic_datasets import CleanClinicDataset
-from entry import *
+from entry import PRETRAINEDMODEL
 from params import parse_args
 from utils import *
 
 args = parse_args()
+
+# Define the pretrained model to use
 
 random.seed(0)
 np.random.seed(0)
@@ -81,13 +84,6 @@ else:
     val_dataset = Subset(dataset, val_idx)
     assert len(train_idx) + len(val_idx) == len(_train_idx)
 
-    train_datasets = [train_dataset]
-    val_datasets = [val_dataset]
-    test_datasets = [test_dataset]
-
-train_dataset = train_datasets[r]
-val_dataset = val_datasets[r]
-test_dataset = test_datasets[r]
 logging.info(
     f"Len datasets: {len(train_dataset)}, {len(val_dataset)}, {len(test_dataset)}"
 )
@@ -118,32 +114,20 @@ word2id = dict(reversed(x) for x in enumerate(vocab))
 label_list = dataset.LE.classes_
 
 train_size = len(train_dataset)
-x = csr_matrix((train_size, embed_dim), dtype=np.float)
+x = csr_matrix((train_size, embed_dim), dtype=np.float64)
 y = dataset.ohe_labels[train_dataset.indices]
 
 val_size = len(val_dataset)
-vx = csr_matrix((val_size, embed_dim), dtype=np.float)
+vx = csr_matrix((val_size, embed_dim), dtype=np.float64)
 vy = dataset.ohe_labels[val_dataset.indices]
 
 test_size = len(test_dataset)
-tx = csr_matrix((test_size, embed_dim), dtype=np.float)
+tx = csr_matrix((test_size, embed_dim), dtype=np.float64)
 ty = dataset.ohe_labels[test_dataset.indices]
 
-allx = csr_matrix((train_size + vocab_size, embed_dim), dtype=np.float)
-ally = np.concatenate((y.toarray(), np.zeros((vocab_size, len(label_list)))))
+allx = csr_matrix((train_size + vocab_size, embed_dim), dtype=np.float64)
+ally = np.concatenate((y, np.zeros((vocab_size, len(label_list)))))
 
-logging.info(
-    (
-        x.shape,
-        y.shape,
-        tx.shape,
-        ty.shape,
-        allx.shape,
-        ally.shape,
-        vx.shape,
-        vy.shape,
-    )
-)
 logging.info(
     (
         x.shape,
@@ -307,64 +291,64 @@ data_path = "data"
 os.makedirs(data_path, exist_ok=True)
 
 if args.testunklar:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}_testunklar.x", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}_testunklar.x", "wb")
 else:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}.x", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}.x", "wb")
 pkl.dump(x, f)
 f.close()
 
 if args.testunklar:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}_testunklar.y", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}_testunklar.y", "wb")
 else:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}.y", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}.y", "wb")
 pkl.dump(y, f)
 f.close()
 
 if args.testunklar:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}_testunklar.tx", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}_testunklar.tx", "wb")
 else:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}.tx", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}.tx", "wb")
 pkl.dump(tx, f)
 f.close()
 
 if args.testunklar:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}_testunklar.ty", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}_testunklar.ty", "wb")
 else:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}.ty", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}.ty", "wb")
 pkl.dump(ty, f)
 f.close()
 
 if args.testunklar:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}_testunklar.allx", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}_testunklar.allx", "wb")
 else:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}.allx", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}.allx", "wb")
 pkl.dump(allx, f)
 f.close()
 
 if args.testunklar:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}_testunklar.ally", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}_testunklar.ally", "wb")
 else:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}.ally", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}.ally", "wb")
 pkl.dump(ally, f)
 f.close()
 
 if args.testunklar:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}_testunklar.adj", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}_testunklar.adj", "wb")
 else:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}.adj", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}.adj", "wb")
 pkl.dump(adj, f)
 f.close()
 
 if args.testunklar:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}_testunklar.vx", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}_testunklar.vx", "wb")
 else:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}.vx", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}.vx", "wb")
 pkl.dump(vx, f)
 f.close()
 
 if args.testunklar:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}_testunklar.vy", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}_testunklar.vy", "wb")
 else:
-    f = open(f"{data_path}/ind.{dataset}_{args.doclevel}.vy", "wb")
+    f = open(f"{data_path}/ind.{DATANAME}_{args.doclevel}.vy", "wb")
 pkl.dump(vy, f)
 f.close()

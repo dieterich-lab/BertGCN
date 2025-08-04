@@ -37,4 +37,5 @@ PRETRAINEDPATHDICT = {
     "medbert": "/prj/doctoral_letters/PETGUI/med_bert_local",
 }
 
-PRETRAINEDMODEL = PRETRAINEDPATHDICT[args.bertmodel]
+# Entry point configuration
+PRETRAINEDMODEL = "/prj/doctoral_letters/PETGUI/med_bert_local"
