@@ -39,13 +39,11 @@ class CleanClinicDataset:
         doclevel: str = "letter",
         dev_limit: Optional[int] = None,
         clean: bool = True,
-        nomeds: bool = False,
     ):
         self.tokenizer = tokenizer
         self.file_path = "/prj/doctoral_letters/MIEdeep/corpus/annotated_gold500/med_indication_all_RF_diag.csv"
         self.doclevel_column = self.DOCLEVEL_TO_COLUMN.get(doclevel, "discharge_letter")
         self.clean = clean
-        self.nomeds = nomeds
 
         # Load and prepare dataset
         self.dataset = self._create_dataset(dev_limit)
@@ -109,8 +107,7 @@ class CleanClinicDataset:
         """Construct and clean text from row data."""
         text = row[self.doclevel_column]
 
-        if not self.nomeds:
-            text = f"Medikament {row['medication_name']} & {text}"
+        text = f"Medikament {row['medication_name']} & {text}"
 
         if self.clean:
             text = " ".join(

@@ -32,7 +32,7 @@ logging.basicConfig(
     ],
 )
 
-DATANAME = f"medindcls_{args.doclevel}" if args.data == "MIC" else "csc"
+DATANAME = f"medindcls_{args.doclevel}"
 
 tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
 model = AutoModelForSequenceClassification.from_pretrained(PRETRAINEDMODEL)
@@ -302,10 +302,7 @@ adj = csr_matrix((weight, (row, col)), shape=(node_size, node_size))
 
 # dump objects
 logging.info("Dumping objects")
-if not args.cv:
-    data_path = "data"
-else:
-    data_path = f"data/{r}"
+data_path = "data"
 
 os.makedirs(data_path, exist_ok=True)
 
