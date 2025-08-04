@@ -1,7 +1,7 @@
 """
-Data management utilities for graph construction.
+Utility functions for the BertGCN package.
 
-Handles dataset loading, saving, and matrix creation for the graph building pipeline.
+Common utilities used throughout the package.
 """
 
 import logging
@@ -12,29 +12,74 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 from scipy.sparse import csr_matrix
-from transformers import AutoTokenizer
 
-from bertgcn.datasets import CleanClinicDataset
-from bertgcn.utils import get_paths
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+# Default paths
+DEFAULT_OUTPUT_DIR = Path("outputs")
+DEFAULT_DATA_DIR = DEFAULT_OUTPUT_DIR / "data"
+DEFAULT_MODELS_DIR = DEFAULT_OUTPUT_DIR / "models"
+DEFAULT_GRAPHS_DIR = DEFAULT_DATA_DIR / "graphs"
+DEFAULT_DATASETS_DIR = DEFAULT_DATA_DIR / "datasets"
+DEFAULT_LOGS_DIR = DEFAULT_OUTPUT_DIR / "logs"
 
 
-def load_dataset(
-    tokenizer: AutoTokenizer, doclevel: str, clean: bool = True
-) -> CleanClinicDataset:
-    """Load existing dataset or create new one."""
-    paths = get_paths()
-    dataset_file = paths.get_dataset_path(doclevel, "medbert", clean=clean)
+def create_directories():
+    """Create necessary directories if they don't exist."""
+    for directory in [
+        DEFAULT_OUTPUT_DIR,
+        DEFAULT_DATA_DIR,
+        DEFAULT_MODELS_DIR,
+        DEFAULT_GRAPHS_DIR,
+        DEFAULT_DATASETS_DIR,
+        DEFAULT_LOGS_DIR,
+    ]:
+        directory.mkdir(parents=True, exist_ok=True)
 
-    if dataset_file.exists():
-        with open(dataset_file, "rb") as f:
-            return pickle.load(f)
 
-    dataset = CleanClinicDataset(tokenizer=tokenizer, doclevel=doclevel, clean=clean)
-    dataset_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(dataset_file, "wb") as f:
-        pickle.dump(dataset, f)
+class Paths:
+    """Class for managing file paths in the project."""
 
-    return dataset
+    def __init__(self):
+        """Initialize paths and create directories."""
+        self.output_dir = DEFAULT_OUTPUT_DIR
+        self.data_dir = DEFAULT_DATA_DIR
+        self.models_dir = DEFAULT_MODELS_DIR
+        self.graphs_dir = DEFAULT_GRAPHS_DIR
+        self.datasets_dir = DEFAULT_DATASETS_DIR
+        self.logs_dir = DEFAULT_LOGS_DIR
+
+        # Create directories if they don't exist
+        create_directories()
+
+    def get_dataset_path(self, doclevel, model_name, clean=True):
+        """Get path for processed dataset."""
+        clean_suffix = "_clean" if clean else ""
+        return self.datasets_dir / f"{doclevel}_{model_name}{clean_suffix}.pkl"
+
+    def get_graph_path(self, dataset_name, doclevel, testunklar=False):
+        """Get path for graph files."""
+        graph_dir = self.graphs_dir / f"{dataset_name}"
+        graph_dir.mkdir(parents=True, exist_ok=True)
+        return graph_dir
+
+    def get_finetuned_model_path(self, doclevel, clean=True):
+        """Get path for fine-tuned BERT model."""
+        clean_suffix = "_clean" if clean else ""
+        return self.models_dir / "finetuned" / f"{doclevel}{clean_suffix}"
+
+    def get_gcn_model_path(self, doclevel, clean=True):
+        """Get path for trained GCN model."""
+        clean_suffix = "_clean" if clean else ""
+        return self.models_dir / "gcn" / f"{doclevel}{clean_suffix}"
+
+
+def get_paths():
+    """Get paths singleton instance."""
+    return Paths()
 
 
 def create_data_matrices(dataset, metadata, embed_dim):

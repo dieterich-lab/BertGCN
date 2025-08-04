@@ -9,8 +9,8 @@ import logging
 import smtplib
 from dataclasses import dataclass
 from datetime import datetime
-from email.mime.multipart import MimeMultipart
-from email.mime.text import MimeText
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ class NotificationManager:
 
         try:
             # Create message
-            msg = MimeMultipart()
+            msg = MIMEMultipart()
             msg["From"] = self.config.email_username
             msg["To"] = ", ".join(recipients)
             msg["Subject"] = subject

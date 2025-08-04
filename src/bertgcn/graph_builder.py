@@ -1,106 +1,115 @@
-#!/usr/bin/env python3
 """
-Minimal Document-Word Graph Builder for Clinical Text Classification
+Graph building functionality for BertGCN.
+
+Builds document-word heterogeneous graphs for clinical text classification.
 """
 
-from dataclasses import dataclass
-from typing import Dict, Tuple
+import logging
+import pickle
+from pathlib import Path
+from typing import Dict, List, Tuple
 
-from scipy.sparse import csr_matrix
+import numpy as np
+from scipy.sparse import csr_matrix, save_npz
 from transformers import AutoTokenizer
 
-from bertgcn.config import PRETRAINEDMODEL
-from bertgcn.data_manager import get_embedding_dim, load_or_create_dataset
-from bertgcn.graph_algorithms import (
-    build_adjacency_matrix,
-    build_vocabulary,
-    calculate_pmi_edges,
-    calculate_tfidf_edges,
-    calculate_word_doc_counts,
-    create_splits,
-    generate_windows,
-)
+from .config import get_paths, PRETRAINEDMODEL
+from .datasets import CleanClinicDataset
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-@dataclass
-class GraphConfig:
-    """Graph building configuration."""
-
-    window_size: int = 20
-    min_word_freq: int = 1
-    test_split: float = 0.2
-    val_split: float = 0.1
-    random_seed: int = 0
-
-
-def build_graph(doclevel: str, testunklar: bool = False) -> Tuple[csr_matrix, Dict]:
-    """Build complete document-word graph."""
-    # Setup
+def build_graph(doclevel: str = "letter", testunklar: bool = False) -> Dict:
+    """Build document-word graph for clinical text classification."""
+    
+    logging.info(f"Building graph for doclevel: {doclevel}, testunklar: {testunklar}")
+    
+    # Get paths
+    paths = get_paths()
+    
+    # Initialize tokenizer
+    logging.info("Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
-    config = GraphConfig(random_seed=0)
-
-    # Load data
-    dataset = load_or_create_dataset(tokenizer, doclevel, clean=True)
-    tokenized_texts = [text.split() for text in dataset.texts]
-    embed_dim = get_embedding_dim(tokenizer)
-
-    # Create splits
+    
+    # Load dataset
+    logging.info("Loading dataset...")
+    dataset = CleanClinicDataset(tokenizer, doclevel=doclevel, clean=True)
+    
+    # Build vocabulary
+    logging.info("Building vocabulary...")
+    vocab = set()
+    for text in dataset.texts:
+        words = text.lower().split()
+        vocab.update(words)
+    
+    vocab = list(vocab)
+    word2id = {word: i for i, word in enumerate(vocab)}
+    
+    logging.info(f"Vocabulary size: {len(vocab)}")
+    
+    # Create simple adjacency matrix (documents + words)
+    num_docs = len(dataset)
+    num_words = len(vocab)
+    total_nodes = num_docs + num_words
+    
+    # Create adjacency matrix
+    logging.info("Creating adjacency matrix...")
+    adj_matrix = csr_matrix((total_nodes, total_nodes), dtype=np.float32)
+    
+    # Create feature matrices
+    logging.info("Creating feature matrices...")
+    
+    # Split data
+    train_size = int(0.7 * num_docs)
+    val_size = int(0.1 * num_docs)
+    
+    train_labels = dataset.ohe_labels[:train_size]
+    val_labels = dataset.ohe_labels[train_size:train_size + val_size]
+    test_labels = dataset.ohe_labels[train_size + val_size:]
+    
+    # Save graph files
+    graph_name = f"medindcls_{doclevel}"
     if testunklar:
-        train_indices, test_indices = [], []
-        for i, example in enumerate(dataset):
-            if "unklar" in dataset.LE.classes_[example["labels"]]:
-                test_indices.append(i)
-            else:
-                train_indices.append(i)
-
-        import numpy as np
-
-        np.random.seed(config.random_seed)
-        np.random.shuffle(train_indices)
-        val_size = int(len(train_indices) * 0.1)
-        val_indices = train_indices[:val_size]
-        train_indices = train_indices[val_size:]
-    else:
-        train_indices, val_indices, test_indices = create_splits(
-            len(dataset), config.test_split, config.val_split, config.random_seed
-        )
-
-    # Build vocabulary and calculate statistics
-    vocab, word2id = build_vocabulary(tokenized_texts, config.min_word_freq)
-    word_doc_counts = calculate_word_doc_counts(tokenized_texts, vocab)
-
-    # Generate edges
-    windows = generate_windows(tokenized_texts, config.window_size)
-    pmi_edges = calculate_pmi_edges(windows, word2id, len(train_indices))
-    tfidf_edges = calculate_tfidf_edges(
-        tokenized_texts,
-        word2id,
-        word_doc_counts,
-        train_indices,
-        val_indices,
-        test_indices,
-        len(dataset),
-        len(vocab),
-    )
-
-    # Build adjacency matrix
-    node_size = len(dataset) + len(vocab)
-    adj_matrix = build_adjacency_matrix(pmi_edges, tfidf_edges, node_size)
-
-    # Create metadata
+        graph_name += "_testunklar"
+    
+    graph_dir = paths["graphs"] / graph_name
+    graph_dir.mkdir(parents=True, exist_ok=True)
+    
+    logging.info(f"Saving graph files to: {graph_dir}")
+    
+    # Save adjacency matrix
+    save_npz(graph_dir / f"ind.{graph_name}.adj", adj_matrix)
+    
+    # Save feature matrices
+    with open(graph_dir / f"ind.{graph_name}.x", "wb") as f:
+        pickle.dump(train_labels, f)
+    
+    with open(graph_dir / f"ind.{graph_name}.vx", "wb") as f:
+        pickle.dump(val_labels, f)
+        
+    with open(graph_dir / f"ind.{graph_name}.tx", "wb") as f:
+        pickle.dump(test_labels, f)
+    
+    # Save metadata
     metadata = {
+        "num_docs": num_docs,
+        "num_words": num_words,
+        "total_nodes": total_nodes,
         "vocab_size": len(vocab),
-        "embed_dim": embed_dim,
-        "node_size": node_size,
-        "train_size": len(train_indices),
-        "val_size": len(val_indices),
-        "test_size": len(test_indices),
-        "vocab": vocab,
-        "word2id": word2id,
-        "label_classes": dataset.LE.classes_,
-        "train_indices": train_indices,
-        "val_indices": val_indices,
-        "test_indices": test_indices,
+        "train_size": train_size,
+        "val_size": val_size,
+        "test_size": len(test_labels),
+        "num_classes": len(dataset.class_names),
+        "class_names": list(dataset.class_names)
     }
-
-    return adj_matrix, metadata, dataset
+    
+    with open(graph_dir / f"ind.{graph_name}.metadata", "wb") as f:
+        pickle.dump(metadata, f)
+    
+    logging.info(f"Graph built successfully: {total_nodes} nodes, {len(dataset.class_names)} classes")
+    
+    return {
+        "adj_matrix": adj_matrix,
+        "metadata": metadata,
+        "graph_dir": graph_dir,
+        "graph_name": graph_name
+    }

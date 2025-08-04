@@ -280,3 +280,20 @@ status: ## Show system status
 	@poetry run bertgcn model list || echo "No models available"
 	@echo "$(YELLOW)System Resources:$(NC)"
 	@docker stats --no-stream --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}"
+	
+## Configuration utilities
+show-config: ## Show available configurations
+	@echo "$(BLUE)📋 Available Configurations:$(NC)"
+	@echo "$(YELLOW)Default Config:$(NC) configs/default.yaml"
+	@echo "$(YELLOW)BERT Fine-tuning:$(NC) configs/bert_finetune.yaml"
+	@echo "$(YELLOW)BertGCN Training:$(NC) configs/bertgcn_train.yaml"
+	@echo ""
+	@echo "$(GREEN)To view a specific config, use: make show-config-bert or make show-config-gcn$(NC)"
+
+show-config-bert: ## Show BERT fine-tuning configuration
+	@echo "$(BLUE)📋 BERT Fine-tuning Configuration:$(NC)"
+	@poetry run python -c "import yaml; print(yaml.dump(yaml.safe_load(open('configs/bert_finetune.yaml')), sort_keys=False, indent=2))"
+
+show-config-gcn: ## Show BertGCN training configuration  
+	@echo "$(BLUE)📋 BertGCN Training Configuration:$(NC)"
+	@poetry run python -c "import yaml; print(yaml.dump(yaml.safe_load(open('configs/bertgcn_train.yaml')), sort_keys=False, indent=2))"

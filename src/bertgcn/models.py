@@ -1,6 +1,102 @@
+"""
+Models for BertGCN.
+
+Contains the BERT fine-tuning and BertGCN models.
+"""
+
+import logging
+
+import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from sklearn.metrics import classification_report, f1_score
+from transformers import AutoModel, AutoTokenizer
+
+from .config import PRETRAINEDMODEL
+
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
+
+
+class BertClassifier(pl.LightningModule):
+    """BERT classifier for clinical text."""
+
+    def __init__(self, num_classes: int = 3, learning_rate: float = 5e-5):
+        super().__init__()
+        self.save_hyperparameters()
+
+        self.bert = AutoModel.from_pretrained(PRETRAINEDMODEL)
+        self.classifier = nn.Linear(self.bert.config.hidden_size, num_classes)
+        self.criterion = nn.CrossEntropyLoss()
+
+    def forward(self, input_ids, attention_mask):
+        outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        pooled_output = outputs.pooler_output
+        return self.classifier(pooled_output)
+
+    def training_step(self, batch, batch_idx):
+        outputs = self(batch["input_ids"], batch["attention_mask"])
+        loss = self.criterion(outputs, batch["labels"])
+        self.log("train_loss", loss)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        outputs = self(batch["input_ids"], batch["attention_mask"])
+        loss = self.criterion(outputs, batch["labels"])
+        preds = torch.argmax(outputs, dim=1)
+
+        self.log("val_loss", loss, prog_bar=True)
+        return {"val_loss": loss, "preds": preds, "targets": batch["labels"]}
+
+    def configure_optimizers(self):
+        return torch.optim.AdamW(self.parameters(), lr=self.hparams.learning_rate)
+
+
+class BertGCNModel(pl.LightningModule):
+    """BertGCN hybrid model."""
+
+    def __init__(self, num_classes: int = 3, mix_factor: float = 0.7):
+        super().__init__()
+        self.save_hyperparameters()
+
+        # BERT component
+        self.bert = AutoModel.from_pretrained(PRETRAINEDMODEL)
+
+        # GCN component (simplified)
+        self.gcn = nn.Linear(self.bert.config.hidden_size, self.bert.config.hidden_size)
+
+        # Classifier
+        self.classifier = nn.Linear(self.bert.config.hidden_size, num_classes)
+        self.criterion = nn.CrossEntropyLoss()
+
+    def forward(self, input_ids, attention_mask, graph_features=None):
+        # BERT features
+        bert_outputs = self.bert(input_ids=input_ids, attention_mask=attention_mask)
+        bert_features = bert_outputs.pooler_output
+
+        # Mix BERT and GCN features (simplified)
+        if graph_features is not None:
+            gcn_features = self.gcn(graph_features)
+            combined_features = (
+                self.hparams.mix_factor * bert_features
+                + (1 - self.hparams.mix_factor) * gcn_features
+            )
+        else:
+            combined_features = bert_features
+
+        return self.classifier(combined_features)
+
+    def training_step(self, batch, batch_idx):
+        outputs = self(batch["input_ids"], batch["attention_mask"])
+        loss = self.criterion(outputs, batch["labels"])
+        self.log("train_loss", loss)
+        return loss
+
+    def configure_optimizers(self):
+        return torch.optim.AdamW(self.parameters(), lr=1e-3)
+
+
 from transformers import AutoModel, AutoTokenizer
 
 from .gcn_models.torch_gcn import GCN

@@ -43,7 +43,8 @@ grafana-client = "^3.5.0"
 docker = "^6.1.0"
 
 [tool.poetry.scripts]
-bertgcn = "bertgcn.simple_cli:cli"
+bertgcn = "bertgcn.cli:app"
+build-graph = "bertgcn.__main__:main"
 
 [build-system]
 requires = ["poetry-core"]

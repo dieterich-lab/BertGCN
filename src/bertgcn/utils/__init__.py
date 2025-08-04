@@ -5,6 +5,7 @@ from .model_management import ModelManager
 from .model_validation import ModelValidator
 from .monitoring import log_prediction_metrics
 from .notifications import send_training_alert
+from .paths import get_paths
 
 __all__ = [
     "DataValidator",

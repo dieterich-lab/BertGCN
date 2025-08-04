@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Entry point for running bertgcn as a module.
+Main entry point for BertGCN graph building.
 """
 
-from bertgcn.simple_cli import cli
+from .graph_cli_enhanced import main
 
 if __name__ == "__main__":
-    cli()
+    main()

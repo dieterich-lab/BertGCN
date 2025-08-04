@@ -1,23 +1,29 @@
 #!/usr/bin/env python3
 """
-BertGCN Core Package
+BertGCN: Clinical Text Classification with Graph Neural Networks
 
-Production-ready BertGCN framework for clinical text classification.
+A clean, professional implementation for clinical text classification
+using BERT embeddings and Graph Convolutional Networks.
 """
 
-__version__ = "1.0.0"
-__author__ = "Clinical AI Team"
+__version__ = "0.1.0"
+__author__ = "BertGCN Team"
 
-# Import only the core working components
-from .config import PRETRAINEDMODEL, get_paths, set_random_seeds
-from .data import CleanClinicDataset
-from .models import BertClassifier, BertGCN
+from .config import get_paths
+from .config_enhanced import get_graph_config, get_model_path
+from .config_enhanced import get_paths as get_enhanced_paths
+
+# Core imports for graph building
+from .datasets import CleanClinicDataset
+from .graph_builder import build_graph
+from .graph_builder_enhanced import build_graph_enhanced
 
 __all__ = [
-    "PRETRAINEDMODEL",
-    "get_paths",
-    "set_random_seeds",
     "CleanClinicDataset",
-    "BertClassifier",
-    "BertGCN",
+    "build_graph",
+    "build_graph_enhanced",
+    "get_paths",
+    "get_enhanced_paths",
+    "get_model_path",
+    "get_graph_config",
 ]
