@@ -41,8 +41,10 @@ class CleanClinicDataset:
         dev_limit: Optional[int] = None,
         clean: bool = True,
         nomeds: bool = False,
+        max_length: int = 512,
     ):
         self.tokenizer = tokenizer
+        self.max_length = max_length
         self.file_path = "/prj/doctoral_letters/MIEdeep/corpus/annotated_gold500/med_indication_all_RF_diag.csv"
         self.doclevel_column = self.DOCLEVEL_TO_COLUMN.get(doclevel, "discharge_letter")
         self.clean = clean
@@ -140,6 +142,7 @@ class CleanClinicDataset:
             examples["processed_text"],
             truncation=True,
             padding="max_length",
+            max_length=self.max_length,
             return_tensors=None,  # Return lists for datasets compatibility
         )
 
@@ -148,12 +151,18 @@ class CleanClinicDataset:
 
     def __getitem__(self, idx: int) -> dict:
         """Get item for PyTorch compatibility."""
+        import torch
+
+        # Convert numpy int64 to regular Python int
+        if isinstance(idx, np.integer):
+            idx = int(idx)
+
         item = self.dataset[idx]
         return {
-            "input_ids": item["input_ids"],
-            "attention_mask": item["attention_mask"],
-            "labels": item["label_id"],
-            "meds": item["med_id"],
+            "input_ids": torch.tensor(item["input_ids"], dtype=torch.long),
+            "attention_mask": torch.tensor(item["attention_mask"], dtype=torch.long),
+            "labels": torch.tensor(item["label_id"], dtype=torch.long),
+            "meds": torch.tensor(item["med_id"], dtype=torch.long),
         }
 
     def to_torch_dataset(self):

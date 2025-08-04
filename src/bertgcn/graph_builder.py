@@ -9,9 +9,9 @@ from typing import Dict, Tuple
 from scipy.sparse import csr_matrix
 from transformers import AutoTokenizer
 
-from config import PRETRAINEDMODEL
-from data_manager import get_embedding_dim, load_or_create_dataset
-from graph_algorithms import (
+from bertgcn.config import PRETRAINEDMODEL
+from bertgcn.data_manager import get_embedding_dim, load_or_create_dataset
+from bertgcn.graph_algorithms import (
     build_adjacency_matrix,
     build_vocabulary,
     calculate_pmi_edges,

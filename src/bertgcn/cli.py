@@ -14,35 +14,60 @@ import asyncio
 from pathlib import Path
 from typing import List, Optional
 
-import mlflow
-import typer
-from rich import print as rprint
-from rich.console import Console
-from rich.progress import Progress
-from rich.table import Table
+try:
+    import mlflow
 
-from bertgcn.pipelines.inference import InferencePipeline
-from bertgcn.pipelines.training import MLOpsTrainingPipeline
-from bertgcn.utils.data_validation import DataValidator
-from bertgcn.utils.model_management import ModelManager
+    MLFLOW_AVAILABLE = True
+except ImportError:
+    MLFLOW_AVAILABLE = False
 
-console = Console()
-app = typer.Typer(
-    name="bertgcn",
-    help="🏥 BertGCN Clinical Text Classification Framework",
-    rich_markup_mode="rich",
-)
+try:
+    import typer
+    from rich import print as rprint
+    from rich.console import Console
+    from rich.progress import Progress
+    from rich.table import Table
 
-# Subcommands
-train_app = typer.Typer(help="Training operations")
-model_app = typer.Typer(help="Model management")
-data_app = typer.Typer(help="Data operations")
-serve_app = typer.Typer(help="Model serving")
+    TYPER_AVAILABLE = True
+except ImportError:
+    TYPER_AVAILABLE = False
 
-app.add_typer(train_app, name="train")
-app.add_typer(model_app, name="model")
-app.add_typer(data_app, name="data")
-app.add_typer(serve_app, name="serve")
+try:
+    from omegaconf import OmegaConf
+
+    OMEGACONF_AVAILABLE = True
+except ImportError:
+    OMEGACONF_AVAILABLE = False
+
+from bertgcn.data_manager import create_data_matrices, save_graph_files
+from bertgcn.finetune_bert import main as finetune_bert_main
+from bertgcn.graph_builder import build_graph
+
+if TYPER_AVAILABLE:
+    console = Console()
+    app = typer.Typer(
+        name="bertgcn",
+        help="🏥 BertGCN Clinical Text Classification Framework",
+        rich_markup_mode="rich",
+    )
+
+    # Subcommands
+    train_app = typer.Typer(help="Training operations")
+    model_app = typer.Typer(help="Model management")
+    data_app = typer.Typer(help="Data operations")
+    serve_app = typer.Typer(help="Model serving")
+
+    app.add_typer(train_app, name="train")
+    app.add_typer(model_app, name="model")
+    app.add_typer(data_app, name="data")
+    app.add_typer(serve_app, name="serve")
+else:
+    # Fallback console without Rich
+    class SimpleConsole:
+        def print(self, *args, **kwargs):
+            print(*args)
+
+    console = SimpleConsole()
 
 
 @app.command()

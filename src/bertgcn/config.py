@@ -38,18 +38,14 @@ def set_random_seeds(seed: int = 0):
     torch.manual_seed(seed)
 
 
-import os
-from pathlib import Path
-from typing import Optional
-
-
 class ProjectPaths:
     """Centralized path management for the BertGCN project."""
 
     def __init__(self, base_dir: Optional[Path] = None):
         """Initialize project paths."""
         if base_dir is None:
-            base_dir = Path(__file__).parent
+            # Go up to the project root from src/bertgcn/
+            base_dir = Path(__file__).parent.parent.parent
 
         self.base_dir = Path(base_dir)
 
@@ -129,6 +125,23 @@ class ProjectPaths:
     def get_cache_path(self, cache_type: str) -> Path:
         """Get path for cache files."""
         return self.cache_dir / cache_type
+
+    def get_log_path(
+        self, model_type: str, doclevel: str, experiment_name: Optional[str] = None
+    ) -> Path:
+        """Get path for PyTorch Lightning logs with meaningful names."""
+        from datetime import datetime
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        if experiment_name:
+            log_name = f"{model_type}_{doclevel}_{experiment_name}_{timestamp}"
+        else:
+            log_name = f"{model_type}_{doclevel}_{timestamp}"
+
+        log_path = self.logs_dir / "lightning_logs" / log_name
+        log_path.mkdir(parents=True, exist_ok=True)
+        return log_path
 
 
 # Global instance for easy access
