@@ -9,19 +9,15 @@ using BERT embeddings and Graph Convolutional Networks.
 __version__ = "0.1.0"
 __author__ = "BertGCN Team"
 
-from .config import get_paths
-from .config_enhanced import get_graph_config, get_model_path
-from .config_enhanced import get_paths as get_enhanced_paths
+from .config import get_paths, get_graph_config, get_model_path
 
 # Core imports for graph building
 from .datasets import CleanClinicDataset
-from .graph_builder import build_graph
-from .graph_builder_enhanced import build_graph_enhanced
+from .graph_builder import build_graph_enhanced as build_graph
 
 __all__ = [
     "CleanClinicDataset",
     "build_graph",
-    "build_graph_enhanced",
     "get_paths",
     "get_enhanced_paths",
     "get_model_path",

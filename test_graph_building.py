@@ -6,7 +6,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from bertgcn.graph_builder_enhanced import build_graph_enhanced
+from bertgcn.graph_builder import build_graph_enhanced
 from bertgcn.graph_inspector import inspect_graph, validate_graph
 
 

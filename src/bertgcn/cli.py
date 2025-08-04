@@ -16,7 +16,7 @@ import click
 
 from bertgcn.config import PRETRAINEDMODEL, get_paths
 from bertgcn.datasets import CleanClinicDataset
-from bertgcn.graph_builder import build_graph
+from bertgcn.graph_builder import build_graph_enhanced as build_graph
 from bertgcn.models import BertClassifier, BertGCNModel
 
 logging.basicConfig(

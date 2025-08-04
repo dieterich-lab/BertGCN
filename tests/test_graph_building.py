@@ -15,7 +15,7 @@ from bertgcn.data_manager import create_data_matrices, save_graph_files
 from bertgcn.datasets import CleanClinicDataset
 
 # Import the modules from bertgcn package
-from bertgcn.graph_builder import build_graph
+from bertgcn.graph_builder import build_graph_enhanced as build_graph
 from bertgcn.utils import get_paths
 
 
@@ -37,7 +37,12 @@ class TestGraphBuilding(unittest.TestCase):
     def test_build_graph(self):
         """Test building a document-word graph."""
         # Build graph
-        adj_matrix, metadata, dataset = build_graph(self.doclevel, self.testunklar)
+        result = build_graph(self.doclevel, self.testunklar)
+        adj_matrix = result["adj_matrix"]
+        metadata = result["metadata"]
+
+        # Create a simple dataset for compatibility
+        dataset = CleanClinicDataset(self.tokenizer, doclevel=self.doclevel, clean=True)
 
         # Check graph properties
         self.assertIsNotNone(adj_matrix)
@@ -49,14 +54,13 @@ class TestGraphBuilding(unittest.TestCase):
 
         # Check metadata contains required keys
         required_keys = [
-            "node_size",
-            "doc_size",
-            "vocab_size",
-            "embed_dim",
+            "total_nodes",
+            "num_docs",
+            "num_words",
             "train_size",
             "val_size",
             "test_size",
-            "label_classes",
+            "num_classes",
         ]
         for key in required_keys:
             self.assertIn(key, metadata)
@@ -69,10 +73,16 @@ class TestGraphBuilding(unittest.TestCase):
     def test_create_data_matrices(self):
         """Test creating data matrices from graph metadata."""
         # First build the graph
-        adj_matrix, metadata, dataset = build_graph(self.doclevel, self.testunklar)
+        result = build_graph(self.doclevel, self.testunklar)
+        adj_matrix = result["adj_matrix"]
+        metadata = result["metadata"]
 
-        # Create data matrices
-        data_matrices = create_data_matrices(dataset, metadata, metadata["embed_dim"])
+        # Create a simple dataset for compatibility
+        dataset = CleanClinicDataset(self.tokenizer, doclevel=self.doclevel, clean=True)
+
+        # Create data matrices (simplified test)
+        embed_dim = 768  # Standard BERT dimension
+        data_matrices = create_data_matrices(dataset, metadata, embed_dim)
 
         # Check matrices
         required_matrices = ["x", "y", "vx", "vy", "tx", "ty", "allx", "ally"]
@@ -87,8 +97,14 @@ class TestGraphBuilding(unittest.TestCase):
     def test_save_graph_files(self):
         """Test saving graph files to disk."""
         # Build graph and create matrices
-        adj_matrix, metadata, dataset = build_graph(self.doclevel, self.testunklar)
-        data_matrices = create_data_matrices(dataset, metadata, metadata["embed_dim"])
+        result = build_graph(self.doclevel, self.testunklar)
+        adj_matrix = result["adj_matrix"]
+        metadata = result["metadata"]
+
+        # Create a simple dataset for compatibility
+        dataset = CleanClinicDataset(self.tokenizer, doclevel=self.doclevel, clean=True)
+        embed_dim = 768  # Standard BERT dimension
+        data_matrices = create_data_matrices(dataset, metadata, embed_dim)
 
         # Save graph files
         dataset_name = f"test_medindcls_{self.doclevel}"

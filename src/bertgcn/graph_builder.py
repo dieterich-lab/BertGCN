@@ -14,7 +14,7 @@ import numpy as np
 from scipy.sparse import csr_matrix, save_npz
 from transformers import AutoTokenizer
 
-from .config_enhanced import get_graph_config, get_model_path, get_paths
+from .config import get_graph_config, get_model_path, get_paths
 from .datasets import CleanClinicDataset
 
 logging.basicConfig(

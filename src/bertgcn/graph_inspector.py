@@ -152,7 +152,7 @@ def inspect_graph(graph_dir: Path, graph_name: str) -> None:
 if __name__ == "__main__":
     import sys
 
-    from .config_enhanced import get_paths
+    from .config import get_paths
 
     paths = get_paths()
 
