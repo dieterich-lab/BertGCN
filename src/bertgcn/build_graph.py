@@ -39,28 +39,21 @@ from torch.utils.data import Subset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
 from bertgcn.clinic_datasets import CleanClinicDataset
-from bertgcn.entry import PRETRAINEDMODEL
+from bertgcn.config import DEFAULT_MODEL_PATH
+from bertgcn.core import get_logger
 from bertgcn.params import parse_args
 from bertgcn.utils import *
 
-# Configure logging
-
-logger = logging.getLogger(__name__)
-if not logger.handlers:
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-        level=logging.INFO,
-        handlers=[logging.StreamHandler()],
-    )
+# Get logger
+logger = get_logger(__name__)
 
 
 # Set seeds for reproducibility
 def set_seed(seed: int = 0) -> None:
     """Set seeds for reproducibility."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
+    from bertgcn.core import setup_environment
+
+    setup_environment(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.deterministic = True
@@ -763,8 +756,8 @@ def main() -> None:
 
     # Initialize BERT model and tokenizer
     with log_step("Loading BERT model and tokenizer"):
-        tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
-        model = AutoModelForSequenceClassification.from_pretrained(PRETRAINEDMODEL)
+        tokenizer = AutoTokenizer.from_pretrained(DEFAULT_MODEL_PATH)
+        model = AutoModelForSequenceClassification.from_pretrained(DEFAULT_MODEL_PATH)
         embed_dim = model.bert.embeddings.word_embeddings.embedding_dim
         logger.info(f"Embedding dimension: {embed_dim}")
         del model  # Free memory
