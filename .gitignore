@@ -1,11 +1,5 @@
-tmp/
-tboard/
-outputs/
-lightning_logs/
-models/
-logs/
 data/
-*.sh
+slurm/
 .vscode
 
 # Byte-compiled / optimized / DLL files
