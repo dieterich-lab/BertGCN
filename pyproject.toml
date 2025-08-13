@@ -1,9 +1,56 @@
-[project]
-name = "bertgcn_clinic"
+[tool.poetry]
+name = "bertgcn"
 version = "0.1.0"
-description = "A project to classify doctoral letters using BERT and GCN."
-authors = [{ name = "Your Name", email = "your@email.com" }]
+description = "BertGCN: A BERT-based Graph Convolutional Network for document classification"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/dieterich-lab/BertGCN"
+packages = [{include = "bertgcn", from = "src"}]
+
+[tool.poetry.dependencies]
+python = ">=3.8.1,<3.12"
+numpy = ">=1.20.0"
+scipy = ">=1.7.0"
+pandas = ">=1.3.0"
+scikit-learn = ">=1.0.0"
+transformers = ">=4.15.0"
+ignite = ">=0.4.8"
+pytest = ">=7.0.0"
+tqdm = ">=4.62.0"
+torch = ">=2.2.0"  # Compatible with CUDA 12.6
+torchvision = ">=0.17.0"
+torchaudio = ">=2.2.0"
+dgl = ">=1.1.2"  # Compatible with CUDA 12.6
+
+[tool.poetry.group.dev.dependencies]
+black = "^23.3.0"
+isort = "^5.12.0"
+flake8 = "^6.0.0"
+pytest = "^7.0.0"
+pytest-cov = "^4.1.0"
+jupyter = "^1.0.0"
+ipykernel = "^6.0.0"
 
 [build-system]
-requires = ["setuptools>=61.0"]
-build-backend = "setuptools.build_meta"
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 88
+target-version = ["py38", "py39", "py310", "py311"]
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 88
+
+[tool.poetry.scripts]
+build-graph = "bertgcn.build_graph:main"
+finetune-bert = "bertgcn.finetune_bert:main"
+train-bertgcn = "bertgcn.train_bert_gcn:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_functions = "test_*"

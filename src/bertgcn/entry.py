@@ -13,7 +13,7 @@ from transformers import (
     LongformerForTokenClassification,
 )
 
-from params import parse_args
+from bertgcn.params import parse_args
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.simplefilter(action="ignore", category=FutureWarning)
@@ -22,7 +22,12 @@ random.seed(0)
 np.random.seed(0)
 torch.manual_seed(0)
 
-args = parse_args()
+# Only parse args when this module is run directly
+if __name__ == "__main__":
+    args = parse_args()
+else:
+    # When imported, provide default args or None
+    args = None
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 

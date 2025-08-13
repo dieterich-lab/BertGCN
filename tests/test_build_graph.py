@@ -1,7 +1,7 @@
 from collections import Counter, defaultdict
 from math import log
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, mock_open, patch
 
 import numpy as np
 import pytest

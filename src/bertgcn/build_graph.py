@@ -4,6 +4,9 @@ Build a document-word graph with TF-IDF and PMI edges for a BertGCN model.
 This script creates a graph where nodes represent documents and words, and edges
 represent their relationships using PMI (Pointwise Mutual Information) for word-word
 edges and TF-IDF for document-word edges.
+
+When installed in development mode, changes to this file will be immediately reflected
+without needing to reinstall the package.
 """
 
 import logging
@@ -29,83 +32,19 @@ from typing import (
 )
 
 # Try to import required packages, but handle gracefully if they're not available
-try:
-    import numpy as np
-except ImportError:
-    print("WARNING: NumPy is not installed, required for graph construction")
-    np = None
+import numpy as np
+import torch
+from scipy.sparse import csr_matrix, lil_matrix
+from torch.utils.data import Subset
+from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
-try:
-    import torch
-
-    TORCH_AVAILABLE = True
-except ImportError:
-    print("WARNING: PyTorch is not installed, some features may be limited")
-    TORCH_AVAILABLE = False
-
-try:
-    from scipy.sparse import csr_matrix, lil_matrix
-except ImportError:
-    print("WARNING: SciPy is not installed, required for sparse matrices")
-    csr_matrix = lil_matrix = None
-
-try:
-    from torch.utils.data import Subset
-except ImportError:
-    # Define a basic Subset class if torch is not available
-    class Subset:
-        def __init__(self, dataset, indices):
-            self.dataset = dataset
-            self.indices = indices
-
-        def __len__(self):
-            return len(self.indices)
-
-
-try:
-    from transformers import AutoModelForSequenceClassification, AutoTokenizer
-except ImportError:
-    print(
-        "WARNING: Transformers library is not installed, BERT functionality will not work"
-    )
-    AutoModelForSequenceClassification = AutoTokenizer = None
-
-# Local imports - handle gracefully if not in path
-try:
-    from bertgcn.clinic_datasets import CleanClinicDataset
-    from bertgcn.entry import PRETRAINEDMODEL
-    from bertgcn.params import parse_args
-    from bertgcn.utils import *
-except ImportError:
-    # Try relative imports if module imports fail
-    try:
-        from .clinic_datasets import CleanClinicDataset
-        from .entry import PRETRAINEDMODEL
-        from .params import parse_args
-        from .utils import *
-    except ImportError:
-        print("WARNING: Cannot import local modules, script may not function correctly")
-        # Define minimal versions of required classes/constants
-        PRETRAINEDMODEL = "bert-base-uncased"
-        CleanClinicDataset = None
-
-        def parse_args():
-            """Minimal argument parser if original cannot be imported"""
-            import argparse
-
-            parser = argparse.ArgumentParser()
-            parser.add_argument("--doclevel", default="letter")
-            parser.add_argument("--testunklar", action="store_true")
-            parser.add_argument("--window_size", type=int, default=20)
-            parser.add_argument("--batch_size", type=int, default=1000)
-            parser.add_argument(
-                "--bidirectional_tfidf", action="store_true", default=True
-            )
-            parser.add_argument("--min_pmi", type=float, default=0.0)
-            return parser.parse_args()
-
+from bertgcn.clinic_datasets import CleanClinicDataset
+from bertgcn.entry import PRETRAINEDMODEL
+from bertgcn.params import parse_args
+from bertgcn.utils import *
 
 # Configure logging
+
 logger = logging.getLogger(__name__)
 if not logger.handlers:
     logging.basicConfig(
