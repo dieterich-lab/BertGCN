@@ -47,9 +47,13 @@ class CleanClinicDataset:
         doclevel: str = "letter",
         dev_limit: Optional[int] = None,
         clean: bool = True,
+        file_path: Optional[Union[str, Path]] = None,
     ):
         self.tokenizer = tokenizer
-        self.file_path = "/prj/doctoral_letters/MIEdeep/corpus/annotated_gold500/med_indication_all_RF_diag.csv"
+        self.file_path = (
+            file_path
+            or "/prj/doctoral_letters/MIEdeep/corpus/annotated_gold500/med_indication_all_RF_diag.csv"
+        )
         self.doclevel_column = self.DOCLEVEL_TO_COLUMN.get(doclevel, "discharge_letter")
         self.clean = clean
 

@@ -1,20 +1,9 @@
-[tool.poetry]
-name = "bertgcn"
+[project]
+name = "bertgcn_clinic"
 version = "0.1.0"
-description = "BERT-GCN research prototype"
-authors = ["Your Name <your.email@example.com>"]
-
-[tool.poetry.dependencies]
-python = "^3.8"
-torch = "^2.0.0"
-transformers = "^4.21.0"
-scikit-learn = "^1.1.0"
-scipy = "^1.9.0"
-numpy = "^1.24.0"
-datasets = "^2.0.0"
-pandas = "^1.5.0"
-argparse = "^1.4.0"
+description = "A project to classify doctoral letters using BERT and GCN."
+authors = [{ name = "Your Name", email = "your@email.com" }]
 
 [build-system]
-requires = ["poetry-core"]
-build-backend = "poetry.core.masonry.api"
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
