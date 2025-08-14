@@ -22,6 +22,7 @@ torch = ">=2.2.0"  # Compatible with CUDA 12.6
 torchvision = ">=0.17.0"
 torchaudio = ">=2.2.0"
 dgl = ">=1.1.2"  # Compatible with CUDA 12.6
+typer = ">=0.9.0"  # CLI app builder with type hints
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.3.0"

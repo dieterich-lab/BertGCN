@@ -54,9 +54,15 @@ def set_seed(seed: int = 0) -> None:
     from bertgcn.core import setup_environment
 
     setup_environment(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        torch.backends.cudnn.deterministic = True
+    # Additional CUDA-specific settings, only if torch.cuda is available
+    if hasattr(torch, "cuda") and torch.cuda.is_available():
+        try:
+            torch.cuda.manual_seed_all(seed)
+            torch.backends.cudnn.deterministic = True
+        except (AttributeError, ImportError):
+            logger.warning(
+                "CUDA support unavailable in PyTorch. Running in CPU-only mode."
+            )
 
 
 @contextmanager
@@ -697,14 +703,14 @@ def load_or_create_dataset(tokenizer, doclevel: str, clean: bool = True) -> Any:
 
 
 def split_dataset(
-    dataset, args, train_ratio: float = 0.7, val_ratio: float = 0.1
+    dataset, params, train_ratio: float = 0.7, val_ratio: float = 0.1
 ) -> Tuple[List[int], List[int], List[int], Subset, Subset, Subset]:
     """
     Split dataset into train, validation, and test sets.
 
     Args:
         dataset: The dataset to split
-        args: Arguments containing splitting parameters
+        params: BertGCNParameters object containing splitting parameters
         train_ratio: Ratio of training data (default: 0.7)
         val_ratio: Ratio of validation data (default: 0.1)
 
@@ -712,7 +718,7 @@ def split_dataset(
         Tuple containing indices and dataset subsets
     """
     with log_step("Splitting dataset"):
-        if not args.testunklar:
+        if not params.testunklar:
             # Standard split
             idx = np.arange(len(dataset))
             random.shuffle(idx)
@@ -812,29 +818,29 @@ def save_graph_components(
 def main() -> None:
     """Main function to build and save the document-word graph."""
     # Parse arguments and set seed
-    args = parse_args()
-    set_seed(0)
+    params = parse_args()
+    set_seed(params.seed)
 
     # Set dataset name
-    dataname = f"medindcls_{args.doclevel}"
+    dataname = f"medindcls_{params.doclevel}"
 
     logger.info(f"Building graph for dataset {dataname}")
-    logger.info(f"Arguments: {args}")
+    logger.info(f"Arguments: {params.to_dict()}")
 
     # Initialize BERT model and tokenizer
     with log_step("Loading BERT model and tokenizer"):
-        tokenizer = AutoTokenizer.from_pretrained(DEFAULT_MODEL_PATH)
-        model = AutoModelForSequenceClassification.from_pretrained(DEFAULT_MODEL_PATH)
+        tokenizer = AutoTokenizer.from_pretrained(params.model_path)
+        model = AutoModelForSequenceClassification.from_pretrained(params.model_path)
         embed_dim = model.bert.embeddings.word_embeddings.embedding_dim
         logger.info(f"Embedding dimension: {embed_dim}")
         del model  # Free memory
 
     # Load or create dataset
-    dataset = load_or_create_dataset(tokenizer, args.doclevel)
+    dataset = load_or_create_dataset(tokenizer, params.doclevel)
 
     # Split dataset
     train_idx, val_idx, test_idx, train_dataset, val_dataset, test_dataset = (
-        split_dataset(dataset, args)
+        split_dataset(dataset, params)
     )
 
     # Configure and initialize graph builder
@@ -842,12 +848,10 @@ def main() -> None:
         dataset=dataset,
         embed_dim=embed_dim,
         dataname=dataname,
-        window_size=args.window_size if hasattr(args, "window_size") else 20,
-        batch_size=args.batch_size if hasattr(args, "batch_size") else 1000,
-        bidirectional_tfidf=(
-            args.bidirectional_tfidf if hasattr(args, "bidirectional_tfidf") else True
-        ),
-        min_pmi_threshold=args.min_pmi if hasattr(args, "min_pmi") else 0,
+        window_size=params.window_size,
+        batch_size=params.batch_size,
+        bidirectional_tfidf=params.bidirectional_tfidf,
+        min_pmi_threshold=params.min_pmi,
     )
 
     # Build graph
@@ -856,7 +860,9 @@ def main() -> None:
     )
 
     # Save graph components to disk
-    save_graph_components(graph_components, dataname, args.doclevel, args.testunklar)
+    save_graph_components(
+        graph_components, dataname, params.doclevel, params.testunklar
+    )
 
     logger.info("Graph building complete!")
 
