@@ -1,273 +1,333 @@
+"""
+Fine-tune a Hugging Face Transformer model for sequence classification.
+
+This script provides a clean, modern approach to fine-tuning transformer models
+on sequence classification tasks with:
+- Proper logging and checkpointing
+- Early stopping and learning rate scheduling
+- Comprehensive evaluation metrics
+- Support for various model architectures
+"""
+
 import datetime
+import json
 import logging
 import os
 import pickle
-import random
-from collections import Counter
 from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
 import torch
-from ignite.engine import Engine, Events
-from ignite.handlers import EarlyStopping
-from ignite.handlers.param_scheduler import create_lr_scheduler_with_warmup
-from ignite.metrics import Accuracy, ClassificationReport, Loss, Precision, Recall
-from ignite.metrics.confusion_matrix import ConfusionMatrix
-from ignite.utils import convert_tensor, setup_logger
-from torch.optim import lr_scheduler
-from torch.optim.lr_scheduler import ExponentialLR, ReduceLROnPlateau
-from torch.utils.data import DataLoader, Subset
-from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
-from clinic_datasets import CleanClinicDataset
-from entry import *
-from metrics import SklearnClassificationReport
-from params import parse_args
-from utils import *
-
-args = parse_args()
-
-# LR = 5e-6
-LR = 1e-5
-NEPOCHS = args.nepochs
-BATCHSIZE = 8
-# ACCUSTEPS = 8
-ACCUSTEPS = 1
-
-random.seed(0)
-np.random.seed(0)
-torch.manual_seed(0)
-
-now = datetime.datetime.now()
-now_str = now.strftime("%Y-%m-%d_%H:%M")
-
-LOGPATH = Path("logs") / "finetune" / args.data
-os.makedirs(LOGPATH, exist_ok=True)
-
-handlers = [
-    logging.FileHandler(LOGPATH / f"{now_str}.log", mode="w"),
-    logging.StreamHandler(),
-]
-
-logging.basicConfig(
-    format=f"%(asctime)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    level=logging.INFO,
-    handlers=handlers,
+from torch.utils.data import DataLoader, Dataset, Subset, random_split
+from tqdm.auto import tqdm
+from transformers import (
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    EarlyStoppingCallback,
+    Trainer,
+    TrainingArguments,
+    get_linear_schedule_with_warmup,
+    set_seed,
 )
+from transformers.trainer_utils import EvalPrediction
+from transformers.training_args import IntervalStrategy
 
-logging.info(f"Learning rate {LR}, Batch size {BATCHSIZE} Accu steps {ACCUSTEPS}")
+from bertgcn.clinic_datasets import CleanClinicDataset
+from bertgcn.config import MODEL_PATHS
+from bertgcn.core import get_logger, setup_environment
+from bertgcn.params import parse_args
 
-tokenizer = AutoTokenizer.from_pretrained(PRETRAINEDMODEL)
+# Initialize logger
+logger = get_logger(__name__)
 
 
-dataset_file = Path("data") / f"medindcls_{args.bertmodel}_{args.doclevel}.json"
-if not dataset_file.exists():
-    logging.info("Creating dataset")
-    dataset = CleanClinicDataset(
+def load_or_create_dataset(
+    tokenizer, model_name: str, doc_level: str, task: str = "MIC", clean: bool = False
+) -> CleanClinicDataset:
+    """
+    Load or create the dataset for fine-tuning.
+
+    Args:
+        tokenizer: Tokenizer to use for processing text
+        model_name: Name of the model (used in filename)
+        doc_level: Document level (letter, sentence, etc.)
+        task: Task name
+        clean: Whether to clean the text
+
+    Returns:
+        The dataset
+    """
+    dataset_file = Path("data") / f"{task.lower()}_{model_name}_{doc_level}.json"
+
+    if dataset_file.exists():
+        logger.info(f"Loading dataset from: {dataset_file}")
+        with open(dataset_file, "rb") as f:
+            dataset = pickle.load(f)
+    else:
+        logger.info("Creating dataset")
+        dataset = CleanClinicDataset(
+            tokenizer=tokenizer,
+            task=task,
+            doclevel=doc_level,
+            clean=clean,
+        )
+        logger.info(f"Saving dataset to: {dataset_file}")
+        os.makedirs(dataset_file.parent, exist_ok=True)
+        with open(dataset_file, "wb") as f:
+            pickle.dump(dataset, f)
+
+    return dataset
+
+
+def split_dataset(
+    dataset: Dataset, test_unclear: bool = False
+) -> Tuple[Subset, Subset, Subset]:
+    """
+    Split dataset into train, validation and test sets.
+
+    Args:
+        dataset: Dataset to split
+        test_unclear: If True, use all "unclear" samples as test set
+
+    Returns:
+        Tuple of (train_dataset, val_dataset, test_dataset)
+    """
+
+    if not test_unclear:
+        # Random split
+        idx = np.arange(len(dataset))
+        np.random.shuffle(idx)
+        train_idx = idx[: int(len(idx) * 0.7)]
+        val_idx = idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)]
+        test_idx = idx[int(len(idx) * 0.8) :]
+    else:
+        # Separate unclear samples
+        train_val_idx, test_idx = [], []
+        for i, x in enumerate(dataset):
+            if "unklar" in dataset.LE.classes_[x["labels"]]:
+                test_idx.append(i)
+            else:
+                train_val_idx.append(i)
+
+        # Split the non-unclear samples into train/val
+        np.random.shuffle(train_val_idx)
+        split_idx = int(len(train_val_idx) * 0.9)
+        train_idx = train_val_idx[:split_idx]
+        val_idx = train_val_idx[split_idx:]
+
+        logger.info(
+            f"Dataset split: {len(train_idx)} train, {len(val_idx)} val, {len(test_idx)} test "
+            f"(total: {len(train_idx) + len(val_idx) + len(test_idx)})"
+        )
+
+    return (
+        Subset(dataset, train_idx),
+        Subset(dataset, val_idx),
+        Subset(dataset, test_idx),
+    )
+
+
+def compute_metrics(eval_pred: EvalPrediction) -> Dict[str, float]:
+    """
+    Compute evaluation metrics from model predictions.
+
+    Args:
+        eval_pred: Model predictions and labels
+
+    Returns:
+        Dictionary of metrics
+    """
+    logits, labels = eval_pred
+    predictions = np.argmax(logits, axis=1)
+
+    # Basic metrics
+    accuracy = np.mean(predictions == labels)
+
+    # Per class metrics
+    from sklearn.metrics import (
+        accuracy_score,
+        classification_report,
+        confusion_matrix,
+        f1_score,
+        precision_score,
+        recall_score,
+    )
+
+    precision_macro = precision_score(
+        labels, predictions, average="macro", zero_division=0
+    )
+    recall_macro = recall_score(labels, predictions, average="macro", zero_division=0)
+    f1_macro = f1_score(labels, predictions, average="macro", zero_division=0)
+
+    # Return metrics
+    metrics = {
+        "accuracy": accuracy,
+        "f1": f1_macro,
+        "precision": precision_macro,
+        "recall": recall_macro,
+    }
+
+    return metrics
+
+
+def save_detailed_metrics(
+    trainer, dataset, output_dir: Union[str, Path], split: str = "test"
+):
+    """
+    Save detailed evaluation metrics like confusion matrix and classification report.
+
+    Args:
+        trainer: The Hugging Face Trainer object
+        dataset: Dataset to evaluate on
+        output_dir: Directory to save metrics to
+        split: Dataset split name (test, val)
+    """
+    from sklearn.metrics import classification_report, confusion_matrix
+
+    # Get predictions
+    predictions = trainer.predict(dataset)
+    preds = np.argmax(predictions.predictions, axis=1)
+    labels = predictions.label_ids
+
+    # Get class names
+    if hasattr(dataset.dataset, "LE"):
+        class_names = dataset.dataset.LE.classes_
+    else:
+        # If LE is not available, use numeric class names
+        class_names = [str(i) for i in range(len(np.unique(labels)))]
+
+    # Create classification report
+    cr = classification_report(
+        labels, preds, target_names=class_names, output_dict=True
+    )
+    cr_df = pd.DataFrame(cr).transpose()
+
+    # Create confusion matrix
+    cm = confusion_matrix(labels, preds)
+
+    # Save metrics
+    os.makedirs(output_dir, exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    cr_df.to_csv(
+        os.path.join(output_dir, f"{split}_classification_report_{timestamp}.csv")
+    )
+    np.save(os.path.join(output_dir, f"{split}_confusion_matrix_{timestamp}.npy"), cm)
+
+    # Log metrics
+    logger.info(f"\n{cr_df.to_string()}")
+    logger.info(f"\nConfusion Matrix:\n{cm}")
+
+
+def main():
+    """Main entry point for fine-tuning."""
+    # Parse arguments
+    args = parse_args()
+
+    # Set up environment
+    setup_environment(args.seed)
+    set_seed(args.seed)
+
+    # Set up logging
+    log_dir = Path("logs") / "finetune" / args.data
+    os.makedirs(log_dir, exist_ok=True)
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d_%H%M")
+    file_handler = logging.FileHandler(log_dir / f"{now_str}.log", mode="w")
+    logger.addHandler(file_handler)
+
+    # Log parameters
+    logger.info(f"Starting fine-tuning with parameters:")
+    for arg, value in sorted(vars(args).items()):
+        logger.info(f"  {arg}: {value}")
+
+    # Prepare model output directory
+    model_name = Path(args.model_name_or_path).name
+    output_dir = Path(args.output_dir) / args.doclevel / f"{model_name}_{now_str}"
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Load tokenizer
+    logger.info(f"Loading tokenizer from {args.model_name_or_path}")
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path)
+
+    # Load or create dataset
+    dataset = load_or_create_dataset(
         tokenizer=tokenizer,
-        task="MIC",
-        doclevel=args.doclevel,
-        clean=False,
+        model_name=model_name,
+        doc_level=args.doclevel,
     )
-    with open(dataset_file, "wb") as f:
-        logging.info(f"Saving dataset under {dataset_file}")
-        pickle.dump(dataset, f)
-else:
-    logging.info(f"Loading dataset from: {dataset_file}")
-    with open(dataset_file, "rb") as f:
-        dataset = pickle.load(f)
 
-SAVENAME = Path(PRETRAINEDMODEL).stem
-SAVEDIR = Path(f"models/finetuned/{args.doclevel}")
-os.makedirs(SAVEDIR, exist_ok=True)
-if args.testunklar:
-    SAVEPATH = Path(f"{SAVEDIR}/{SAVENAME}_{dataset}_testunklar_best.pt")
-else:
-    SAVEPATH = Path(f"{SAVEDIR}/{SAVENAME}_{dataset}_best.pt")
-
-model = AutoModelForSequenceClassification.from_pretrained(
-    PRETRAINEDMODEL, num_labels=len(dataset.LE.classes_)
-)
-
-optimizer = torch.optim.AdamW(model.parameters(), LR)
-scheduler = ReduceLROnPlateau(optimizer, patience=1, factor=0.5, verbose=True)
-# scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[30], gamma=0.1)
-
-if not args.testunklar:
-    idx = np.arange(len(dataset))
-    random.shuffle(idx)
-    train_idx, val_idx, test_idx = (
-        idx[: int(len(idx) * 0.7)],
-        idx[int(len(idx) * 0.7) : int(len(idx) * 0.8)],
-        idx[int(len(idx) * 0.8) :],
+    # Split dataset
+    train_dataset, val_dataset, test_dataset = split_dataset(
+        dataset=dataset, test_unclear=args.testunklar
     )
-    train_dataset = Subset(dataset, train_idx)
-    val_dataset = Subset(dataset, val_idx)
-    test_dataset = Subset(dataset, test_idx)
-else:
-    _train_idx, test_idx = list(), list()
-    for i, x in enumerate(dataset):
-        if "unklar" in dataset.LE.classes_[x["labels"]]:
-            test_idx.append(i)
-        else:
-            _train_idx.append(i)
-    test_dataset = Subset(dataset, test_idx)
-    random.shuffle(_train_idx)
-    train_idx, val_idx = (
-        _train_idx[: int(len(_train_idx) * 0.9)],
-        _train_idx[int(len(_train_idx) * 0.9) :],
+
+    # Load model
+    logger.info(f"Loading model from {args.model_name_or_path}")
+    model = AutoModelForSequenceClassification.from_pretrained(
+        args.model_name_or_path,
+        num_labels=len(dataset.LE.classes_),
     )
-    train_dataset = Subset(dataset, train_idx)
-    val_dataset = Subset(dataset, val_idx)
-    assert len(train_idx) + len(val_idx) == len(_train_idx)
 
-train_loader = DataLoader(train_dataset, batch_size=BATCHSIZE, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=BATCHSIZE, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=BATCHSIZE, shuffle=False)
-
-criterion = torch.nn.CrossEntropyLoss()
-
-
-def train_step(engine, batch):
-    global model, optimizer, criterion
-    model = model.to(torch.device("cuda:0"))
-    model.train()
-    x, y = batch["input_ids"], batch["labels"]
-    x, y = (
-        convert_tensor(x, torch.device("cuda:0")),
-        convert_tensor(y, torch.device("cuda:0")),
+    # Set up training arguments
+    training_args = TrainingArguments(
+        output_dir=output_dir,
+        evaluation_strategy=IntervalStrategy.STEPS,
+        eval_steps=args.eval_steps,
+        save_strategy=IntervalStrategy.STEPS,
+        save_steps=args.save_steps,
+        learning_rate=args.learning_rate,
+        per_device_train_batch_size=args.batch_size,
+        per_device_eval_batch_size=args.batch_size,
+        num_train_epochs=args.num_train_epochs
+        or args.nepochs,  # Use nepochs as fallback
+        weight_decay=args.weight_decay,
+        load_best_model_at_end=True,
+        metric_for_best_model="f1",
+        fp16=args.fp16,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+        warmup_ratio=args.warmup_ratio,
+        logging_dir=log_dir,
+        logging_steps=50,
+        save_total_limit=3,
+        report_to=["tensorboard"],
     )
-    y_pred = model(x).logits
-    loss = criterion(y_pred, y)
-    loss.backward()
-    if engine.state.iteration % ACCUSTEPS == 0:
-        optimizer.step()
-        optimizer.zero_grad()
-    return loss.item()
 
-
-trainer = Engine(train_step)
-trainer.logger = setup_logger("trainer", level=30)
-
-
-def eval_step(engine, batch):
-    global model
-    model = model.to(torch.device("cuda:0"))
-    with torch.no_grad():
-        model.eval()
-        x, y = batch["input_ids"], batch["labels"]
-        x, y = (
-            convert_tensor(x, torch.device("cuda:0")),
-            convert_tensor(y, torch.device("cuda:0")),
-        )
-        y_pred = model(x).logits
-        return y_pred, y
-
-
-val_evaluator = Engine(eval_step)
-test_evaluator = Engine(eval_step)
-
-precision = Precision(average="macro")
-recall = Recall(average="macro")
-
-metrics = {
-    "accuracy": Accuracy(),
-    "f1": Precision(average="macro")
-    * Recall(average="macro")
-    * 2
-    / (Precision(average="macro") + Recall(average="macro")),
-    "precision": Precision(average="macro"),
-    "recall": Recall(average="macro"),
-    "nll": Loss(criterion),
-    "cr": SklearnClassificationReport(
-        target_names=[
-            dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels))
-        ]
-    ),
-    "cr_dict": SklearnClassificationReport(
-        output_dict=True,
-        target_names=[
-            dataset.LE.classes_[x] for x in np.unique(np.array(dataset.labels))
-        ],
-    ),
-    "cm": ConfusionMatrix(num_classes=len(dataset.LE.classes_)),
-}
-
-for n, f in metrics.items():
-    f.attach(val_evaluator, n)
-
-for n, f in metrics.items():
-    f.attach(test_evaluator, n)
-
-
-def score_function(engine):
-    return -1.0 * engine.state.metrics["nll"]
-
-
-def f1_function(engine):
-    return engine.state.metrics["f1"]
-
-
-stopping_handler = EarlyStopping(
-    patience=args.patience,
-    # score_function=f1_function,
-    score_function=score_function,
-    trainer=trainer,
-)
-val_evaluator.add_event_handler(Events.COMPLETED, stopping_handler)
-
-
-@trainer.on(Events.EPOCH_COMPLETED)
-def log_validation_results(trainer):
-    val_evaluator.run(val_loader)
-    metrics = val_evaluator.state.metrics
-    scheduler.step(metrics["nll"])
-    prec, rec, f1, acc = (
-        metrics["precision"],
-        metrics["recall"],
-        metrics["f1"],
-        metrics["accuracy"],
+    # Set up trainer
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=val_dataset,
+        tokenizer=tokenizer,
+        compute_metrics=compute_metrics,
+        callbacks=[EarlyStoppingCallback(early_stopping_patience=args.patience)],
     )
-    logging.info(
-        f"Validation Results - Epoch: {trainer.state.epoch} Prec: {prec:.2f} Rec: {rec:.2f} F1: {f1:.2f} Acc: {acc:.2f}  Avg loss: {metrics['nll']:.2f}"
-    )
-    if metrics["accuracy"] > log_validation_results.best_val_acc:
-        torch.save(
-            {
-                "bert_model": model.bert.state_dict(),
-                "classifier": model.classifier.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "epoch": trainer.state.epoch,
-                "config": model.config,
-            },
-            SAVEPATH,
-        )
-        log_validation_results.best_val_acc = metrics["accuracy"]
 
-    log_validation_results.best_val_acc = 0
-
+    # Train model
     if not args.testonly:
-        trainer.run(train_loader, max_epochs=NEPOCHS)
+        logger.info("Starting training")
+        trainer.train()
 
-    logging.info(
-        f"Loading best BERT model from {SAVEPATH} saved on {datetime.datetime.fromtimestamp(SAVEPATH.stat().st_ctime)}"
-    )
-    ckpt = torch.load(SAVEPATH)
-    model.bert.load_state_dict(ckpt["bert_model"])
-    model.classifier.load_state_dict(ckpt["classifier"])
-    test_evaluator.run(test_loader)
-    metrics = test_evaluator.state.metrics
-    logging.info(
-        f"Test Results - Epoch[{trainer.state.epoch}] Avg accuracy: {metrics['accuracy']:.2f} Avg loss: {metrics['nll']:.2f}"
-    )
+        # Save best model
+        logger.info(f"Saving best model to {output_dir}")
+        trainer.save_model(output_dir)
+        tokenizer.save_pretrained(output_dir)
 
-    report = metrics["cr_dict"]
-    df = pd.DataFrame(report).transpose()
-    df.to_csv(f"{SAVEDIR}/{args.bertmodel}_cr.csv")
-    logging.info(df.to_latex(index=False, float_format="{:.2f}".format))
-    logging.info(metrics["cr"])
-    cm = metrics["cm"].detach().cpu().numpy()
-    with open(f"{SAVEDIR}/{args.bertmodel}_cm.npy", "wb") as f:
-        np.save(f, cm)
+    # Evaluate on test set
+    logger.info("Evaluating on test set")
+    test_results = trainer.evaluate(test_dataset)
+    logger.info(f"Test results: {test_results}")
+
+    # Save detailed metrics
+    save_detailed_metrics(trainer, test_dataset, output_dir, "test")
+
+    # Save model configuration and args
+    with open(os.path.join(output_dir, "training_args.json"), "w") as f:
+        json.dump(vars(args), f, indent=2)
+
+    logger.info("Fine-tuning completed")
+
+
+if __name__ == "__main__":
+    main()
