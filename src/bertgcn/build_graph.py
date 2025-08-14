@@ -431,9 +431,9 @@ class GraphBuilder:
                     start_idx = batch_idx * batch_size
                     end_idx = min((batch_idx + 1) * batch_size, len(indices))
 
-                    for c, doc_id in enumerate(
-                        indices[start_idx:end_idx], start=start_idx
-                    ):
+                    for batch_pos, doc_id in enumerate(indices[start_idx:end_idx]):
+                        # Calculate correct global position in the indices list
+                        global_pos = start_idx + batch_pos
                         words = self.dataset.texts[doc_id].split()
                         unique_words = set(words) & set(self.word2id.keys())
 
@@ -442,7 +442,7 @@ class GraphBuilder:
                             freq = doc_word_freq.get((doc_id, word_id), 0)
 
                             if freq > 0:
-                                doc_node_id = offset + c
+                                doc_node_id = offset + global_pos
                                 word_node_id = train_size + word_id
 
                                 # Calculate TF-IDF with smoothing
@@ -569,11 +569,22 @@ class GraphBuilder:
         is_symmetric = (adj != adj.T).nnz == 0
         logger.info(f"Adjacency matrix is symmetric: {is_symmetric}")
 
-        if not is_symmetric and self.bidirectional_tfidf:
-            logger.warning(
-                "Adjacency matrix is not symmetric despite bidirectional TF-IDF. "
-                "This might indicate an issue in edge construction."
-            )
+        if not is_symmetric:
+            if self.bidirectional_tfidf:
+                logger.warning(
+                    "Adjacency matrix is not symmetric despite bidirectional TF-IDF. "
+                    "This might indicate an issue in edge construction."
+                )
+
+            # Enforce symmetry by averaging with transpose
+            logger.info("Enforcing symmetry in the adjacency matrix...")
+            adj = 0.5 * (adj + adj.T)
+            # Verify symmetry after fixing
+            is_symmetric = (adj != adj.T).nnz == 0
+            logger.info(f"Adjacency matrix is now symmetric: {is_symmetric}")
+
+        # Validate graph structure before returning
+        self._validate_graph_structure(adj, node_size, train_size, val_size, test_size)
 
         # Return graph components
         graph_data = {
@@ -593,6 +604,62 @@ class GraphBuilder:
         }
 
         return graph_data
+
+    def _validate_graph_structure(
+        self, adj, node_size, train_size, val_size, test_size
+    ):
+        """
+        Validate the graph structure to ensure it meets requirements.
+
+        Args:
+            adj: The adjacency matrix
+            node_size: Total number of nodes
+            train_size, val_size, test_size: Sizes of dataset splits
+        """
+        with log_step("Validating graph structure"):
+            # Check 1: Verify matrix dimensions match expected node count
+            expected_nodes = len(self.dataset) + self.vocab_size
+            assert adj.shape == (node_size, node_size), (
+                f"Adjacency matrix shape {adj.shape} doesn't match expected "
+                f"dimensions ({node_size}, {node_size})"
+            )
+            assert (
+                node_size == expected_nodes
+            ), f"Node size {node_size} doesn't match expected count {expected_nodes}"
+
+            # Check 2: Verify no out-of-bound indices in the adjacency matrix
+            row_indices, col_indices = adj.nonzero()
+            max_idx = max(
+                row_indices.max() if len(row_indices) > 0 else 0,
+                col_indices.max() if len(col_indices) > 0 else 0,
+            )
+            assert (
+                max_idx < node_size
+            ), f"Found edge with index {max_idx} which is outside valid range [0, {node_size-1}]"
+
+            # Check 3: Verify symmetry - already done in build_graph, but double check
+            is_symmetric = (adj != adj.T).nnz == 0
+            assert is_symmetric, "Adjacency matrix must be symmetric for GCN"
+
+            # Check 4: Verify we have connections for each dataset split
+            doc_range = range(len(self.dataset))
+            word_range = range(train_size, train_size + self.vocab_size)
+
+            # Validate train, val, test document node connections
+            for split_name, split_size, offset in [
+                ("train", train_size, 0),
+                ("val", val_size, train_size + self.vocab_size),
+                ("test", test_size, train_size + self.vocab_size + val_size),
+            ]:
+                if split_size > 0:  # Skip empty splits
+                    split_nodes = range(offset, offset + split_size)
+                    # Get subset of adjacency matrix for this split
+                    connections = adj[list(split_nodes)].sum()
+                    assert (
+                        connections > 0
+                    ), f"No connections found for {split_name} documents"
+
+            logger.info("Graph structure validation complete - all checks passed")
 
 
 def load_or_create_dataset(tokenizer, doclevel: str, clean: bool = True) -> Any:

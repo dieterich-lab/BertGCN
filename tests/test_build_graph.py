@@ -58,6 +58,115 @@ def test_pmi_calculation_logic():
         log((count_ij / N) / ((count_i / N) * (count_j / N)))
 
 
+def test_pmi_edge_calculation(sample_clinic_dataset):
+    """
+    Test the PMI edge calculation in GraphBuilder to ensure the implementation is correct.
+    """
+    # Setup
+    dataset = sample_clinic_dataset
+    graph_builder = GraphBuilder(dataset, embed_dim=10, dataname="test_dataset")
+
+    # Mock vocabulary building
+    with patch.object(Path, "open", MagicMock()):
+        graph_builder.build_vocab()
+
+    # Create windows manually with known word co-occurrences
+    test_windows = [
+        ["word1", "word2", "word3"],  # window 1
+        ["word1", "word2"],  # window 2
+        ["word2", "word3", "word4"],  # window 3
+    ]
+
+    # Manually add these words to vocabulary if not present
+    for window in test_windows:
+        for word in window:
+            if word not in graph_builder.word2id:
+                word_id = len(graph_builder.vocab)
+                graph_builder.vocab.append(word)
+                graph_builder.word2id[word] = word_id
+
+    graph_builder.vocab_size = len(graph_builder.vocab)
+
+    # Process windows to get word frequencies and pair counts
+    word_window_count, word_pair_count = graph_builder.process_windows(test_windows)
+
+    # Verify word frequencies
+    for word, expected_count in {
+        "word1": 2,
+        "word2": 3,
+        "word3": 2,
+        "word4": 1,
+    }.items():
+        if word in graph_builder.word2id:
+            word_id = graph_builder.word2id[word]
+            assert (
+                word_window_count[word_id] == expected_count
+            ), f"Word '{word}' should appear in {expected_count} windows"
+
+    # Verify pair counts
+    word_pairs = {
+        ("word1", "word2"): 2,  # appears in windows 1 and 2
+        ("word1", "word3"): 1,  # appears in window 1
+        ("word2", "word3"): 2,  # appears in windows 1 and 3
+        ("word2", "word4"): 1,  # appears in window 3
+        ("word3", "word4"): 1,  # appears in window 3
+    }
+
+    for (word_a, word_b), expected_count in word_pairs.items():
+        if word_a in graph_builder.word2id and word_b in graph_builder.word2id:
+            word_a_id = graph_builder.word2id[word_a]
+            word_b_id = graph_builder.word2id[word_b]
+            pair_count = word_pair_count.get((word_a_id, word_b_id), 0)
+            if pair_count == 0:
+                # Check reverse order (pairs might be stored in either order)
+                pair_count = word_pair_count.get((word_b_id, word_a_id), 0)
+
+            assert (
+                pair_count == expected_count
+            ), f"Pair '{word_a}'-'{word_b}' should appear {expected_count} times"
+
+    # Calculate PMI edges
+    train_size = 3  # arbitrary for testing
+    num_window = len(test_windows)
+    row, col, weight = graph_builder.calculate_pmi_edges(
+        word_window_count, word_pair_count, num_window, train_size
+    )
+
+    # Verify some edge weights using the PMI formula
+    # PMI = log( P(i,j) / (P(i) * P(j)) ) = log( (count_ij / N) / ((count_i / N) * (count_j / N)) )
+
+    # Check that we have the right number of edges (each pair creates two directed edges)
+    expected_edge_count = 0
+    for (i, j), count in word_pair_count.items():
+        if count > 0:
+            # Calculate PMI for this pair
+            word_freq_i = word_window_count[i]
+            word_freq_j = word_window_count[j]
+            eps = 1e-10
+            try:
+                pmi = log(
+                    (count / num_window)
+                    / ((word_freq_i / num_window) * (word_freq_j / num_window) + eps)
+                )
+                if pmi > graph_builder.min_pmi_threshold:
+                    expected_edge_count += 2  # Bidirectional
+            except (ValueError, ZeroDivisionError):
+                continue
+
+    assert (
+        len(weight) == expected_edge_count
+    ), f"Expected {expected_edge_count} PMI edges (bidirectional), got {len(weight)}"
+
+    # Verify edges are bidirectional
+    for i in range(0, len(row), 2):
+        assert (
+            row[i] == col[i + 1] and col[i] == row[i + 1]
+        ), f"Edge {i} should be bidirectional: ({row[i]}, {col[i]}) and ({row[i+1]}, {col[i+1]})"
+        assert (
+            weight[i] == weight[i + 1]
+        ), f"Edge weights should be equal for bidirectional edges: {weight[i]} vs {weight[i+1]}"
+
+
 def test_graph_builder_class(sample_clinic_dataset):
     """
     Test the refactored GraphBuilder class with the small sample dataset.
@@ -287,6 +396,158 @@ def test_load_or_create_dataset(monkeypatch):
     # Verify the dataset was loaded
     assert result == mock_dataset
     mock_pickle.load.assert_called_once()
+
+
+def test_graph_node_indexing(sample_clinic_dataset):
+    """
+    Test that node indexing in the graph builder is correct, specifically
+    targeting the issue with batch processing in TF-IDF edge creation.
+    """
+    # Setup - Use our mock dataset and define a predictable split
+    dataset = sample_clinic_dataset
+
+    # For predictability, we manually define our splits
+    train_idx, val_idx, test_idx = [0, 1, 2], [3], [4]
+    train_dataset = Subset(dataset, train_idx)
+    val_dataset = Subset(dataset, val_idx)
+    test_dataset = Subset(dataset, test_idx)
+
+    # Use a small batch size to force multiple batches
+    graph_builder = GraphBuilder(
+        dataset,
+        embed_dim=10,
+        dataname="test_dataset",
+        batch_size=1,  # Force multiple batches
+    )
+
+    # Mock the vocabulary and word-document matrix building
+    with patch.object(Path, "open", MagicMock()):
+        # First build vocabulary
+        graph_builder.build_vocab()
+
+        # Build word-document matrix
+        graph_builder.build_word_doc_matrix()
+
+        # Create a small set of test indices
+        test_indices = list(range(len(dataset)))
+
+        # Calculate document-word frequencies
+        doc_word_freq = graph_builder.calculate_doc_word_freq(test_indices)
+
+        # Setup datasets_info with proper offsets
+        train_size = len(train_dataset)
+        datasets_info = [
+            (test_indices, 0, "test"),  # Use a simple offset for testing
+        ]
+
+        # Call TF-IDF edge calculation
+        row, col, weight = graph_builder.calculate_tfidf_edges(
+            doc_word_freq, datasets_info, train_size, [], [], []
+        )
+
+        # Check that all node IDs are valid
+        max_node_id = len(dataset) + graph_builder.vocab_size - 1
+
+        for idx in row:
+            assert (
+                0 <= idx <= max_node_id
+            ), f"Invalid node ID {idx} (max: {max_node_id})"
+
+        for idx in col:
+            assert (
+                0 <= idx <= max_node_id
+            ), f"Invalid node ID {idx} (max: {max_node_id})"
+
+        # Verify that TF-IDF edges connect documents and words correctly
+        # Documents should have IDs from 0 to len(dataset)-1
+        # Words should have IDs from train_size to train_size+vocab_size-1
+        doc_node_ids = set(range(len(dataset)))
+        word_node_ids = set(range(train_size, train_size + graph_builder.vocab_size))
+
+        # Check document->word connections
+        doc_to_word = [
+            (r, c) for r, c in zip(row, col) if r in doc_node_ids and c in word_node_ids
+        ]
+        assert len(doc_to_word) > 0, "No document->word connections found"
+
+        # Check word->document connections if bidirectional
+        if graph_builder.bidirectional_tfidf:
+            word_to_doc = [
+                (r, c)
+                for r, c in zip(row, col)
+                if r in word_node_ids and c in doc_node_ids
+            ]
+            assert len(word_to_doc) > 0, "No word->document connections found"
+
+
+def test_adjacency_matrix_symmetry(sample_clinic_dataset):
+    """
+    Test that the adjacency matrix is symmetric after graph construction.
+    """
+    # Setup
+    dataset = sample_clinic_dataset
+    train_idx, val_idx, test_idx = [0, 1, 2], [3], [4]
+    train_dataset = Subset(dataset, train_idx)
+    val_dataset = Subset(dataset, val_idx)
+    test_dataset = Subset(dataset, test_idx)
+
+    # Initialize GraphBuilder
+    graph_builder = GraphBuilder(dataset, embed_dim=10, dataname="test_dataset")
+
+    # Build graph
+    with patch.object(Path, "open", MagicMock()):
+        graph_data = graph_builder.build_graph(
+            train_dataset, val_dataset, test_dataset, train_idx, val_idx, test_idx
+        )
+
+    # Extract adjacency matrix
+    adj = graph_data["adj"]
+
+    # Check matrix properties
+    assert adj.shape[0] == adj.shape[1], "Adjacency matrix should be square"
+
+    # Check symmetry
+    is_symmetric = (adj != adj.T).nnz == 0
+    assert is_symmetric, "Adjacency matrix must be symmetric for GCN"
+
+    # Check for isolated nodes - each node should have at least one connection
+    # Skip this check for now as it depends on the specific dataset structure
+    # node_degrees = np.array(adj.sum(axis=1)).flatten()
+    # assert np.all(node_degrees > 0), "Found isolated nodes in the graph"
+
+
+def test_validate_graph_structure(sample_clinic_dataset):
+    """
+    Test the new graph structure validation method.
+    """
+    # Setup
+    dataset = sample_clinic_dataset
+    train_idx, val_idx, test_idx = [0, 1, 2], [3], [4]
+    train_dataset = Subset(dataset, train_idx)
+    val_dataset = Subset(dataset, val_idx)
+    test_dataset = Subset(dataset, test_idx)
+
+    # Initialize GraphBuilder
+    graph_builder = GraphBuilder(dataset, embed_dim=10, dataname="test_dataset")
+
+    # Build graph
+    with patch.object(Path, "open", MagicMock()):
+        # Build the graph - this should run the validation method internally
+        graph_data = graph_builder.build_graph(
+            train_dataset, val_dataset, test_dataset, train_idx, val_idx, test_idx
+        )
+
+    # Extract graph properties for validation
+    adj = graph_data["adj"]
+    node_size = adj.shape[0]
+    train_size = len(train_dataset)
+    val_size = len(val_dataset)
+    test_size = len(test_dataset)
+
+    # Manually run the validation method again - should pass without errors
+    graph_builder._validate_graph_structure(
+        adj, node_size, train_size, val_size, test_size
+    )
 
 
 @pytest.mark.skip(reason="Patching Path class causing internal pytest errors")
