@@ -426,10 +426,10 @@ class GraphBuilder:
             tfidf_edge_count = 0
 
             # Process datasets
+
             for indices, offset, dataset_type in datasets_info:
                 logger.info(f"Processing {dataset_type} documents...")
 
-                # Process in smaller batches
                 batch_size = min(1000, len(indices))
                 num_batches = (len(indices) + batch_size - 1) // batch_size
 
@@ -438,20 +438,23 @@ class GraphBuilder:
                     end_idx = min((batch_idx + 1) * batch_size, len(indices))
 
                     for batch_pos, doc_id in enumerate(indices[start_idx:end_idx]):
-                        # Calculate correct global position in the indices list
                         global_pos = start_idx + batch_pos
                         words = self.dataset.texts[doc_id].split()
+                        total_words_in_doc = len(words) if len(words) > 0 else 1
                         unique_words = set(words) & set(self.word2id.keys())
 
                         for word in unique_words:
                             word_id = self.word2id[word]
                             freq = doc_word_freq.get((doc_id, word_id), 0)
 
+                            # Normalized term frequency
+                            tf = freq / total_words_in_doc
+
                             if freq > 0:
                                 doc_node_id = offset + global_pos
                                 word_node_id = train_size + word_id
 
-                                # Calculate TF-IDF with smoothing
+                                # Calculate IDF with smoothing
                                 idf = log(
                                     max(
                                         len(self.dataset)
@@ -459,7 +462,7 @@ class GraphBuilder:
                                         1.0,
                                     )
                                 )
-                                tfidf = freq * idf
+                                tfidf = tf * idf
 
                                 # Add document -> word edge
                                 new_row.append(doc_node_id)

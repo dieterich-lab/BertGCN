@@ -9,18 +9,17 @@ repository = "https://github.com/dieterich-lab/BertGCN"
 packages = [{include = "bertgcn", from = "src"}]
 
 [tool.poetry.dependencies]
-python = ">=3.8.1,<3.12"
+python = ">=3.9.0,<3.12"
 numpy = ">=1.20.0"
 scipy = ">=1.7.0"
 pandas = ">=1.3.0"
 scikit-learn = ">=1.0.0"
 transformers = ">=4.15.0"
-ignite = ">=0.4.8"
 pytest = ">=7.0.0"
 tqdm = ">=4.62.0"
-torch = ">=2.2.0"  # Compatible with CUDA 12.6
-torchvision = ">=0.17.0"
-torchaudio = ">=2.2.0"
+torch = "2.8.0"  # Compatible with CUDA 12.6
+# torch = "2.8.0+cu126"  # Compatible with CUDA 12.6
+torchvision = "0.23.0"
 dgl = ">=1.1.2"  # Compatible with CUDA 12.6
 typer = ">=0.9.0"  # CLI app builder with type hints
 
