@@ -34,6 +34,7 @@ from typing import (
 # Try to import required packages, but handle gracefully if they're not available
 import numpy as np
 import torch
+import typer
 from scipy.sparse import csr_matrix, lil_matrix
 from torch.utils.data import Subset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -41,7 +42,7 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from bertgcn.clinic_datasets import CleanClinicDataset
 from bertgcn.config import DEFAULT_MODEL_PATH
 from bertgcn.core import get_logger
-from bertgcn.params import parse_args
+from bertgcn.params import BertGCNParameters
 from bertgcn.utils import *
 
 # Get logger
@@ -105,71 +106,80 @@ class GraphBuilder:
             min_pmi_threshold: Minimum PMI value threshold (default: 0)
         """
         self.dataset = dataset
-        self.embed_dim = embed_dim
-        self.dataname = dataname
-        self.window_size = window_size
-        self.batch_size = batch_size
-        self.bidirectional_tfidf = bidirectional_tfidf
-        self.min_pmi_threshold = min_pmi_threshold
 
-        # Initialized later
-        self.vocab = []
-        self.vocab_size = 0
-        self.word2id = {}
-        self.word_doc_matrix = None
-        self.word_in_doc_counts = {}
-        self.data_dir = Path("data")
-        self.data_dir.mkdir(exist_ok=True)
+        def main(
+            doclevel: str = typer.Option("letter", help="Document level"),
+            bertmodel: str = typer.Option("medbert", help="BERT model"),
+            window_size: int = typer.Option(20, help="Window size"),
+            batch_size: int = typer.Option(1000, help="Batch size"),
+            bidirectional_tfidf: bool = typer.Option(True, help="Bidirectional TF-IDF"),
+            min_pmi: float = typer.Option(0.0, help="Minimum PMI"),
+            seed: int = typer.Option(42, help="Random seed"),
+            testunklar: bool = typer.Option(False, help="Test unclear samples"),
+        ) -> None:
+            """
+            Main function to build and save the document-word graph.
+            Parses CLI arguments, loads model and data, builds graph, and saves results.
+            """
+            params = BertGCNParameters(
+                doclevel=doclevel,
+                bertmodel=bertmodel,
+                window_size=window_size,
+                batch_size=batch_size,
+                bidirectional_tfidf=bidirectional_tfidf,
+                min_pmi=min_pmi,
+                seed=seed,
+                testunklar=testunklar,
+            )
+            set_seed(params.seed)
 
-    def build_vocab(self) -> Tuple[List[str], Dict[str, int]]:
-        """
-        Build vocabulary from dataset texts.
+            dataname = f"medindcls_{params.doclevel}"
+            logger.info(f"Building graph for dataset {dataname}")
+            logger.info(f"Arguments: {params}")
 
-        Returns:
-            Tuple containing the vocabulary list and word2id mapping
-        """
-        with log_step("Building vocabulary"):
-            # Flatten and count all words in the dataset
-            word_counter = Counter(
-                word for text in self.dataset.texts for word in text.split()
+            # Model path selection (fallback to DEFAULT_MODEL_PATH if needed)
+            try:
+                from bertgcn.config import MODEL_PATHS, DEFAULT_MODEL_PATH
+                model_path = MODEL_PATHS.get(params.bertmodel, DEFAULT_MODEL_PATH)
+            except ImportError:
+                logger.error("Could not import MODEL_PATHS or DEFAULT_MODEL_PATH from bertgcn.config. Using default path.")
+                model_path = "bert-base-uncased"
+
+            try:
+                with log_step("Loading BERT model and tokenizer"):
+                    tokenizer = AutoTokenizer.from_pretrained(model_path)
+                    model = AutoModelForSequenceClassification.from_pretrained(model_path)
+                    embed_dim = model.bert.embeddings.word_embeddings.embedding_dim
+                    logger.info(f"Embedding dimension: {embed_dim}")
+                    del model  # Free memory
+            except Exception as e:
+                logger.error(f"Failed to load model or tokenizer: {e}")
+                raise SystemExit(1)
+
+            dataset = load_or_create_dataset(tokenizer, params.doclevel)
+            train_idx, val_idx, test_idx, train_dataset, val_dataset, test_dataset = (
+                split_dataset(dataset, params)
             )
 
-            self.vocab = list(word_counter.keys())
-            self.vocab_size = len(self.vocab)
-            logger.info(f"Vocabulary size: {self.vocab_size}")
-
-            # Create word2id mapping
-            self.word2id = {word: idx for idx, word in enumerate(self.vocab)}
-
-            # Save vocabulary to file
-            vocab_file = self.data_dir / f"{self.dataname}_vocab.txt"
-            with open(vocab_file, "w") as f:
-                f.write("\n".join(self.vocab))
-
-            return self.vocab, self.word2id
-
-    def build_word_doc_matrix(self) -> Tuple[Any, Dict[str, int]]:
-        """
-        Build a word-document matrix where each entry [i,j] indicates if word i appears in document j.
-
-        Returns:
-            Tuple containing the word-doc sparse matrix and word_in_doc_counts dict
-        """
-        with log_step("Building word-document matrix"):
-            # Create sparse matrix: rows=vocab, cols=docs, values=1 if word appears in doc
-            self.word_doc_matrix = lil_matrix(
-                (self.vocab_size, len(self.dataset)), dtype=np.int8
+            graph_builder = GraphBuilder(
+                dataset=dataset,
+                embed_dim=embed_dim,
+                dataname=dataname,
+                window_size=params.window_size,
+                batch_size=params.batch_size,
+                bidirectional_tfidf=params.bidirectional_tfidf,
+                min_pmi_threshold=params.min_pmi,
             )
 
-            # Process documents in batches for memory efficiency
-            num_docs = len(self.dataset.texts)
-            num_doc_batches = (num_docs + self.batch_size - 1) // self.batch_size
-
-            logger.info(
-                f"Processing {num_docs} documents in {num_doc_batches} batches..."
+            graph_components = graph_builder.build_graph(
+                train_dataset, val_dataset, test_dataset, train_idx, val_idx, test_idx
             )
 
-            for batch_idx in range(num_doc_batches):
+            save_graph_components(
+                graph_components, dataname, params.doclevel, params.testunklar
+            )
+
+            logger.info("Graph building complete!")
                 start_idx = batch_idx * self.batch_size
                 end_idx = min((batch_idx + 1) * self.batch_size, num_docs)
 
@@ -818,35 +828,53 @@ def save_graph_components(
             logger.info(f"Saved {filename}")
 
 
-def main() -> None:
+def main(
+    doclevel: str = typer.Option("letter", help="Document level"),
+    bertmodel: str = typer.Option("medbert", help="BERT model"),
+    window_size: int = typer.Option(20, help="Window size"),
+    batch_size: int = typer.Option(1000, help="Batch size"),
+    bidirectional_tfidf: bool = typer.Option(True, help="Bidirectional TF-IDF"),
+    min_pmi: float = typer.Option(0.0, help="Minimum PMI"),
+    seed: int = typer.Option(42, help="Random seed"),
+    testunklar: bool = typer.Option(False, help="Test unclear samples"),
+):
     """Main function to build and save the document-word graph."""
-    # Parse arguments and set seed
-    params = parse_args()
+    params = BertGCNParameters(
+        doclevel=doclevel,
+        bertmodel=bertmodel,
+        window_size=window_size,
+        batch_size=batch_size,
+        bidirectional_tfidf=bidirectional_tfidf,
+        min_pmi=min_pmi,
+        seed=seed,
+        testunklar=testunklar,
+    )
     set_seed(params.seed)
 
-    # Set dataset name
     dataname = f"medindcls_{params.doclevel}"
-
     logger.info(f"Building graph for dataset {dataname}")
-    logger.info(f"Arguments: {params.to_dict()}")
+    logger.info(f"Arguments: {params}")
 
-    # Initialize BERT model and tokenizer
+    # Model path selection (fallback to DEFAULT_MODEL_PATH if needed)
+    try:
+        from bertgcn.config import DEFAULT_MODEL_PATH, MODEL_PATHS
+
+        model_path = MODEL_PATHS.get(params.bertmodel, DEFAULT_MODEL_PATH)
+    except ImportError:
+        model_path = DEFAULT_MODEL_PATH
+
     with log_step("Loading BERT model and tokenizer"):
-        tokenizer = AutoTokenizer.from_pretrained(params.model_path)
-        model = AutoModelForSequenceClassification.from_pretrained(params.model_path)
+        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        model = AutoModelForSequenceClassification.from_pretrained(model_path)
         embed_dim = model.bert.embeddings.word_embeddings.embedding_dim
         logger.info(f"Embedding dimension: {embed_dim}")
         del model  # Free memory
 
-    # Load or create dataset
     dataset = load_or_create_dataset(tokenizer, params.doclevel)
-
-    # Split dataset
     train_idx, val_idx, test_idx, train_dataset, val_dataset, test_dataset = (
         split_dataset(dataset, params)
     )
 
-    # Configure and initialize graph builder
     graph_builder = GraphBuilder(
         dataset=dataset,
         embed_dim=embed_dim,
@@ -857,12 +885,10 @@ def main() -> None:
         min_pmi_threshold=params.min_pmi,
     )
 
-    # Build graph
     graph_components = graph_builder.build_graph(
         train_dataset, val_dataset, test_dataset, train_idx, val_idx, test_idx
     )
 
-    # Save graph components to disk
     save_graph_components(
         graph_components, dataname, params.doclevel, params.testunklar
     )
@@ -871,4 +897,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    typer.run(main)
