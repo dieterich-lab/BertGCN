@@ -290,6 +290,28 @@ def main(
         for k, v in test_results.items():
             tb_writer.add_scalar(f"test/{k}", v)
         tb_writer.flush()
+        # Explainability (SHAP)
+        try:
+            explainer = shap.Explainer(model, tokenizer)
+            shap_values = explainer([dataset[0]["input_ids"]])
+            shap.summary_plot(shap_values, show=False)
+            shap.save_html(os.path.join(output_dir, "shap_summary.html"), shap_values)
+            mlflow.log_artifact(os.path.join(output_dir, "shap_summary.html"))
+        except Exception as e:
+            logger.warning(f"SHAP explainability failed: {e}")
+        # Explainability (LIME)
+        try:
+            from lime.lime_text import LimeTextExplainer
+            lime_explainer = LimeTextExplainer(class_names=list(dataset.LE.classes_))
+            lime_exp = lime_explainer.explain_instance(
+                dataset[0]["text"],
+                lambda x: model(tokenizer(x, return_tensors="pt")["input_ids"]).logits.detach().numpy(),
+            )
+            lime_exp.save_to_file(os.path.join(output_dir, "lime_explanation.html"))
+            mlflow.log_artifact(os.path.join(output_dir, "lime_explanation.html"))
+        except Exception as e:
+            logger.warning(f"LIME explainability failed: {e}")
+        logger.info("Fine-tuning completed")
 # Example Optuna sweep function (for hyperparameter optimization)
 def objective(trial):
     # Suggest hyperparameters
