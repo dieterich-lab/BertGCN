@@ -106,113 +106,60 @@ class GraphBuilder:
             min_pmi_threshold: Minimum PMI value threshold (default: 0)
         """
         self.dataset = dataset
+        self.embed_dim = embed_dim
+        self.dataname = dataname
+        self.window_size = window_size
+        self.batch_size = batch_size
+        self.bidirectional_tfidf = bidirectional_tfidf
+        self.min_pmi_threshold = min_pmi_threshold
 
-        def main(
-            doclevel: str = typer.Option("letter", help="Document level"),
-            bertmodel: str = typer.Option("medbert", help="BERT model"),
-            window_size: int = typer.Option(20, help="Window size"),
-            batch_size: int = typer.Option(1000, help="Batch size"),
-            bidirectional_tfidf: bool = typer.Option(True, help="Bidirectional TF-IDF"),
-            min_pmi: float = typer.Option(0.0, help="Minimum PMI"),
-            seed: int = typer.Option(42, help="Random seed"),
-            testunklar: bool = typer.Option(False, help="Test unclear samples"),
-        ) -> None:
-            """
-            Main function to build and save the document-word graph.
-            Parses CLI arguments, loads model and data, builds graph, and saves results.
-            """
-            params = BertGCNParameters(
-                doclevel=doclevel,
-                bertmodel=bertmodel,
-                window_size=window_size,
-                batch_size=batch_size,
-                bidirectional_tfidf=bidirectional_tfidf,
-                min_pmi=min_pmi,
-                seed=seed,
-                testunklar=testunklar,
+        # Initialized later
+        self.vocab = []
+        self.vocab_size = 0
+
+    def build_word_doc_matrix(self) -> Tuple[Any, Dict[str, int]]:
+        """
+        Build a word-document matrix where each entry [i,j] indicates if word i appears in document j.
+
+        Returns:
+            Tuple containing the word-doc sparse matrix and word_in_doc_counts dict
+        """
+        with log_step("Building word-document matrix"):
+            # Create sparse matrix: rows=vocab, cols=docs, values=1 if word appears in doc
+            self.word_doc_matrix = lil_matrix(
+                (self.vocab_size, len(self.dataset)), dtype=np.int8
             )
-            set_seed(params.seed)
-
-            dataname = f"medindcls_{params.doclevel}"
-            logger.info(f"Building graph for dataset {dataname}")
-            logger.info(f"Arguments: {params}")
-
-            # Model path selection (fallback to DEFAULT_MODEL_PATH if needed)
-            try:
-                from bertgcn.config import MODEL_PATHS, DEFAULT_MODEL_PATH
-                model_path = MODEL_PATHS.get(params.bertmodel, DEFAULT_MODEL_PATH)
-            except ImportError:
-                logger.error("Could not import MODEL_PATHS or DEFAULT_MODEL_PATH from bertgcn.config. Using default path.")
-                model_path = "bert-base-uncased"
-
-            try:
-                with log_step("Loading BERT model and tokenizer"):
-                    tokenizer = AutoTokenizer.from_pretrained(model_path)
-                    model = AutoModelForSequenceClassification.from_pretrained(model_path)
-                    embed_dim = model.bert.embeddings.word_embeddings.embedding_dim
-                    logger.info(f"Embedding dimension: {embed_dim}")
-                    del model  # Free memory
-            except Exception as e:
-                logger.error(f"Failed to load model or tokenizer: {e}")
-                raise SystemExit(1)
-
-            dataset = load_or_create_dataset(tokenizer, params.doclevel)
-            train_idx, val_idx, test_idx, train_dataset, val_dataset, test_dataset = (
-                split_dataset(dataset, params)
+            # Process documents in batches for memory efficiency
+            num_docs = len(self.dataset.texts)
+            num_doc_batches = (num_docs + self.batch_size - 1) // self.batch_size
+            logger.info(
+                f"Processing {num_docs} documents in {num_doc_batches} batches..."
             )
-
-            graph_builder = GraphBuilder(
-                dataset=dataset,
-                embed_dim=embed_dim,
-                dataname=dataname,
-                window_size=params.window_size,
-                batch_size=params.batch_size,
-                bidirectional_tfidf=params.bidirectional_tfidf,
-                min_pmi_threshold=params.min_pmi,
-            )
-
-            graph_components = graph_builder.build_graph(
-                train_dataset, val_dataset, test_dataset, train_idx, val_idx, test_idx
-            )
-
-            save_graph_components(
-                graph_components, dataname, params.doclevel, params.testunklar
-            )
-
-            logger.info("Graph building complete!")
+            for batch_idx in range(num_doc_batches):
                 start_idx = batch_idx * self.batch_size
                 end_idx = min((batch_idx + 1) * self.batch_size, num_docs)
-
                 # Process this batch of documents
                 for doc_idx in range(start_idx, end_idx):
                     words = set(self.dataset.texts[doc_idx].split())
                     word_ids = [
                         self.word2id[word] for word in words if word in self.word2id
                     ]
-
                     if word_ids:
                         self.word_doc_matrix[word_ids, doc_idx] = 1
-
                 if batch_idx % 10 == 0 or batch_idx == num_doc_batches - 1:
                     logger.info(
                         f"Processed document batch {batch_idx+1}/{num_doc_batches}"
                     )
-
             # Convert to more efficient format
             logger.info("Converting to CSR format for efficiency...")
             self.word_doc_matrix = self.word_doc_matrix.tocsr()
-
             # Extract word-in-docs information efficiently
             self.word_in_doc_counts = {}
-
             for word_idx, word in enumerate(self.vocab):
                 # Get all documents containing this word using sparse matrix slicing
                 doc_indices = self.word_doc_matrix[word_idx].nonzero()[1]
                 self.word_in_doc_counts[word] = len(doc_indices)
-
             return self.word_doc_matrix, self.word_in_doc_counts
-
-    def create_windows(self) -> List[List[str]]:
         """
         Create sliding windows of words from each document.
 
