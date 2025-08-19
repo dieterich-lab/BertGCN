@@ -1,0 +1,51 @@
+# @package _global_
+
+# Default parameters for fine-tuning
+defaults:
+  - _self_
+  - override hydra/hydra_logging: colorlog
+  - override hydra/job_logging: colorlog
+
+hydra:
+  run:
+    dir: ${output_dir}/${hydra.job.name}
+  sweep:
+    dir: ${output_dir}/multirun/${hydra.job.override_dirname}
+    subdir: ${hydra.job.num}
+
+# Experiment parameters
+doclevel: "letter"
+bertmodel: "medbert"
+window_size: 20
+batch_size: 32
+bidirectional_tfidf: True
+min_pmi: 0.0
+seed: 42
+testunklar: False
+model_name_or_path: "bert-base-uncased"
+output_dir: "outputs/finetune"
+eval_steps: 100
+save_steps: 100
+learning_rate: 2e-5
+num_train_epochs: 3
+nepochs: 3 # Fallback
+weight_decay: 0.01
+fp16: False
+gradient_accumulation_steps: 1
+warmup_ratio: 0.1
+patience: 3
+testonly: False
+
+# Optuna sweep configuration
+sweep:
+  run: False
+  n_trials: 20
+  direction: "maximize"
+  sampler:
+    _target_: optuna.samplers.TPESampler
+    seed: ${seed}
+  pruner:
+    _target_: optuna.pruners.MedianPruner
+    n_startup_trials: 5
+    n_warmup_steps: 0
+    interval_steps: 1

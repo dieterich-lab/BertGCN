@@ -1,0 +1,13 @@
+# Training Hyperparameters
+model_name_or_path: "bert-base-uncased"
+seed: 42
+learning_rate: 2e-5
+weight_decay: 0.01
+warmup_ratio: 0.1
+num_train_epochs: 3
+batch_size: 16 # Smaller default for single GPU
+eval_steps: 100
+save_steps: 100
+patience: 3
+fp16: False
+gradient_accumulation_steps: 1
