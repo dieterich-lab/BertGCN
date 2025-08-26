@@ -74,7 +74,7 @@ class CleanClinicDataset:
         self.ohe = OneHotEncoder(sparse_output=False)
         self.ohe_labels = self.ohe.fit_transform(
             np.array(
-                [self.dataset[i]["label_id"] for i in range(len(self.dataset))]
+                [self.dataset[i]["labels"] for i in range(len(self.dataset))]
             ).reshape(-1, 1)
         )
 
@@ -116,7 +116,7 @@ class CleanClinicDataset:
         )
 
         # Add encoded labels to dataset
-        self.dataset = self.dataset.add_column("label_id", label_ids)
+        self.dataset = self.dataset.add_column("labels", label_ids)
         self.dataset = self.dataset.add_column("med_id", med_ids)
 
         # Add processed text
@@ -127,12 +127,13 @@ class CleanClinicDataset:
         self.dataset = self.dataset.map(
             self._tokenize_function,
             batched=True,
+            load_from_cache_file=False,  # Force re-processing
             remove_columns=[
                 col
                 for col in self.dataset.column_names
                 if col
                 not in [
-                    "label_id",
+                    "labels",
                     "med_id",
                     "input_ids",
                     "attention_mask",
@@ -178,14 +179,14 @@ class CleanClinicDataset:
         return {
             "input_ids": item["input_ids"],
             "attention_mask": item["attention_mask"],
-            "labels": item["label_id"],
+            "labels": item["labels"],
             "meds": item["med_id"],
         }
 
     def to_torch_dataset(self):
         """Convert to PyTorch format with proper tensor types."""
         self.dataset.set_format(
-            type="torch", columns=["input_ids", "attention_mask", "label_id", "med_id"]
+            type="torch", columns=["input_ids", "attention_mask", "labels", "med_id"]
         )
         return self.dataset
 

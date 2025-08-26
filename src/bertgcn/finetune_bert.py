@@ -9,23 +9,25 @@ This script is designed for MLOps workflows, integrating:
 - Optuna (via Hydra) for hyperparameter sweeping.
 """
 
+import importlib.metadata
 import os
-import pickle
 import platform
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, Tuple, Union
+from typing import Dict, Tuple
 
 import hydra
+import joblib
 import mlflow
 import numpy as np
 import pandas as pd
-import shap
+import toml
+from datasets import Dataset, load_from_disk
 from lime.lime_text import LimeTextExplainer
 from omegaconf import DictConfig, OmegaConf
+from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Subset
-from torch.utils.tensorboard import SummaryWriter
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
@@ -36,13 +38,9 @@ from transformers import (
 )
 from transformers.training_args import IntervalStrategy
 
-from bertgcn.clinic_datasets import CleanClinicDataset
 from bertgcn.core import get_logger, setup_environment
 
 logger = get_logger(__name__)
-
-
-import importlib.metadata
 
 
 def get_git_commit() -> str:
@@ -63,94 +61,77 @@ def log_environment_info(cfg: DictConfig):
         "platform": platform.platform(),
         "python_version": platform.python_version(),
         "git_commit": get_git_commit(),
-        "packages": {
-            dist.metadata["name"]: dist.version
-            for dist in importlib.metadata.distributions()
-        },
     }
-    # Filter to include only packages listed in pyproject.toml under dependencies
-    # This avoids logging every single package in the environment.
-    try:
-        import toml
 
+    # Add package versions, filtered by pyproject.toml
+    try:
         with open("pyproject.toml", "r") as f:
             pyproject = toml.load(f)
+
         dependencies = (
             pyproject.get("tool", {}).get("poetry", {}).get("dependencies", {})
         )
+
+        package_versions = {
+            dist.metadata["name"]: dist.version
+            for dist in importlib.metadata.distributions()
+        }
+
         relevant_packages = {
-            name: env_info["packages"].get(name)
+            name: package_versions.get(name, "Not Found")
             for name in dependencies
-            if name in env_info["packages"]
+            if name != "python"  # Exclude python itself
         }
         env_info["packages"] = relevant_packages
-    except (FileNotFoundError, ImportError):
-        # If pyproject.toml or toml is not available, log all packages
-        pass
+
+    except (FileNotFoundError, ImportError) as e:
+        logger.warning(f"Could not log package versions: {e}")
+        env_info["packages"] = "Could not be determined"
 
     mlflow.log_dict(env_info, "environment.json")
 
 
-def load_or_create_dataset(tokenizer, cfg: DictConfig) -> CleanClinicDataset:
-    """Loads or creates the dataset based on the provided config."""
-    data_path = Path(cfg.dataset.get("path", None) or Path.cwd() / "data")
-    preprocessed_pickle_path = data_path / "medindcls_medbert_letter_clean.pkl"
-
-    if preprocessed_pickle_path.exists():
-        logger.info(f"Loading pre-processed dataset from {preprocessed_pickle_path}")
-
-        # Workaround for pickle loading error due to module path change
-        # The pickle was created when CleanClinicDataset was in a 'clinic_datasets' module
-        # We need to map 'clinic_datasets' to the new module path 'bertgcn.clinic_datasets'
-        from bertgcn import clinic_datasets
-
-        sys.modules["clinic_datasets"] = clinic_datasets
-
-        with open(preprocessed_pickle_path, "rb") as f:
-            return pickle.load(f)
-
-    # Fallback to original creation logic if the main pickle file is not found
-    logger.warning(
-        f"Pre-processed pickle not found at {preprocessed_pickle_path}. "
-        "Attempting to create dataset from source CSV. This will fail if the CSV is missing."
+def load_processed_dataset(
+    cfg: DictConfig,
+) -> Tuple[Dataset, LabelEncoder, LabelEncoder]:
+    """Loads the preprocessed dataset and label encoders from disk."""
+    data_path = Path(
+        cfg.dataset.get("processed_path", Path.cwd() / "data" / "processed")
     )
-    doclevel = cfg.dataset.doclevel
-    dev_limit = cfg.dataset.get("dev_limit", None)
-    clean = cfg.dataset.get("clean", True)
+    dataset_path = data_path / "tokenized_dataset"
+    le_path = data_path / "label_encoder.joblib"
+    meds_le_path = data_path / "meds_label_encoder.joblib"
 
-    # The cache path will be unique for each combination of dataset parameters
-    cache_path = (
-        data_path / f"cached_dataset_{doclevel}_{dev_limit if dev_limit else 'all'}.pkl"
-    )
+    if not dataset_path.exists() or not le_path.exists() or not meds_le_path.exists():
+        logger.error(
+            f"Processed data not found in {data_path}. "
+            "Please run the preprocessing script first: "
+            "`poetry run python -m bertgcn.preprocess`"
+        )
+        sys.exit(1)
 
-    if cfg.dataset.get("use_cache", True) and cache_path.exists():
-        logger.info(f"Loading cached dataset from {cache_path}")
-        with open(cache_path, "rb") as f:
-            return pickle.load(f)
+    logger.info(f"Loading processed dataset from {dataset_path}")
+    dataset = load_from_disk(dataset_path)
 
-    logger.info("Creating dataset from CSV...")
-    dataset = CleanClinicDataset(
-        tokenizer=tokenizer,
-        doclevel=doclevel,
-        dev_limit=dev_limit,
-        clean=clean,
-        file_path=data_path / "med_indication_all_RF_diag.csv",
+    logger.info("Loading label encoders")
+    le = joblib.load(le_path)
+    meds_le = joblib.load(meds_le_path)
+
+    # Set the format for PyTorch
+    dataset.set_format(
+        type="torch", columns=["input_ids", "attention_mask", "labels", "med_id"]
     )
 
-    if cfg.dataset.get("use_cache", True):
-        logger.info(f"Saving dataset to cache: {cache_path}")
-        with open(cache_path, "wb") as f:
-            pickle.dump(dataset, f)
-
-    return dataset
+    return dataset, le, meds_le
 
 
 def split_dataset(
-    dataset: CleanClinicDataset, cfg: DictConfig
+    dataset: Dataset, le: LabelEncoder, cfg: DictConfig
 ) -> Tuple[Subset, Subset, Subset]:
     """Split the dataset into train, validation, and test sets based on config."""
     idx = np.arange(len(dataset))
     np.random.shuffle(idx)
+
     if not cfg.dataset.test_unclear:
         train_end = int(len(idx) * cfg.dataset.train_ratio)
         val_end = train_end + int(len(idx) * cfg.dataset.val_ratio)
@@ -159,15 +140,20 @@ def split_dataset(
         test_idx = idx[val_end:].tolist()
     else:
         train_val_idx, test_idx = [], []
-        for i, x in enumerate(dataset):
-            if "unklar" in dataset.LE.classes_[x["labels"]]:
-                test_idx.append(i)
+        for i in idx:
+            # We need to get the label name to check for "unklar"
+            # This is less efficient than having a dedicated column, but works.
+            label_name = le.inverse_transform([dataset[int(i)]["label_id"]])[0]
+            if "unklar" in label_name:
+                test_idx.append(int(i))
             else:
-                train_val_idx.append(i)
+                train_val_idx.append(int(i))
+
         np.random.shuffle(train_val_idx)
         split_idx = int(len(train_val_idx) * cfg.dataset.train_val_split_ratio)
         train_idx = train_val_idx[:split_idx]
         val_idx = train_val_idx[split_idx:]
+
     return (
         Subset(dataset, train_idx),
         Subset(dataset, val_idx),
@@ -194,33 +180,12 @@ def compute_metrics(eval_pred) -> Dict[str, float]:
 def log_explainability_artifacts(trainer: Trainer, dataset: Subset, output_dir: str):
     """Generate and log SHAP and LIME explainability reports."""
     logger.info("Generating explainability reports...")
-    model = trainer.model
-    tokenizer = trainer.tokenizer
-    # SHAP
-    try:
-        explainer = shap.Explainer(model, tokenizer)
-        shap_values = explainer(dataset[:10])  # Explain first 10 samples
-        shap.save_html(os.path.join(output_dir, "shap_explanation.html"), shap_values)
-        mlflow.log_artifact(os.path.join(output_dir, "shap_explanation.html"))
-    except Exception as e:
-        logger.warning(f"SHAP explainability failed: {e}")
-    # LIME
-    try:
-        class_names = getattr(dataset.dataset, "LE", None).classes_
-        lime_explainer = LimeTextExplainer(class_names=class_names)
-        text_sample = dataset.dataset.texts[dataset.indices[0]]
-
-        def predictor(texts):
-            inputs = tokenizer(
-                texts, return_tensors="pt", padding=True, truncation=True
-            ).to(model.device)
-            return model(**inputs).logits.detach().cpu().numpy()
-
-        lime_exp = lime_explainer.explain_instance(text_sample, predictor)
-        lime_exp.save_to_file(os.path.join(output_dir, "lime_explanation.html"))
-        mlflow.log_artifact(os.path.join(output_dir, "lime_explanation.html"))
-    except Exception as e:
-        logger.warning(f"LIME explainability failed: {e}")
+    # Note: Explainability tools like SHAP and LIME require the raw text, which is
+    # not part of this streamlined training pipeline. To enable them, the data
+    # loading process would need to be adapted to also provide the original text.
+    logger.warning(
+        "Skipping SHAP and LIME explainability as raw text is not available in this workflow."
+    )
 
 
 def setup_trainer(
@@ -254,6 +219,7 @@ def setup_trainer(
         report_to=["mlflow", "tensorboard"],
     )
 
+    # The default data collator will handle padding and tensor conversion
     return Trainer(
         model=model,
         args=training_args,
@@ -261,7 +227,6 @@ def setup_trainer(
         eval_dataset=val_dataset,
         tokenizer=tokenizer,
         compute_metrics=compute_metrics,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=cfg.hparams.patience)],
     )
 
 
@@ -281,11 +246,14 @@ def main(cfg: DictConfig) -> float:
         mlflow.log_params(OmegaConf.to_container(cfg.hparams, resolve=True))
 
         tokenizer = AutoTokenizer.from_pretrained(cfg.hparams.model_name_or_path)
-        dataset = load_or_create_dataset(tokenizer, cfg)
-        train_dataset, val_dataset, test_dataset = split_dataset(dataset, cfg)
+
+        # Load the pre-processed dataset
+        dataset, le, _ = load_processed_dataset(cfg)
+
+        train_dataset, val_dataset, test_dataset = split_dataset(dataset, le, cfg)
 
         model = AutoModelForSequenceClassification.from_pretrained(
-            cfg.hparams.model_name_or_path, num_labels=len(dataset.LE.classes_)
+            cfg.hparams.model_name_or_path, num_labels=len(le.classes_)
         )
 
         trainer = setup_trainer(
@@ -309,10 +277,6 @@ def main(cfg: DictConfig) -> float:
 
         # For Hydra's Optuna Sweeper
         return test_results.get("eval_f1", 0.0)
-
-
-import hydra
-from omegaconf import DictConfig
 
 
 @hydra.main(config_path="../../conf", config_name="config", version_base=None)

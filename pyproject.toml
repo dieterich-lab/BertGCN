@@ -33,6 +33,8 @@ lime = "^0.2.0.1"
 ray = {extras = ["tune"], version = "^2.24.0"}
 optuna = "^2.10.0"
 tensorboard = "^2.17.0"
+joblib = "^1.4.2"
+toml = "^0.10.2"
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.3.0"
