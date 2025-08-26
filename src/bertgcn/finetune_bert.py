@@ -42,50 +42,106 @@ from bertgcn.core import get_logger, setup_environment
 logger = get_logger(__name__)
 
 
+import importlib.metadata
+
+
 def get_git_commit() -> str:
-    """Get the current git commit hash."""
+    """Returns the current git commit hash, or 'Not a git repo' if not in a git repo."""
     try:
-        return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode().strip()
-    except Exception:
-        return "Not a git repository"
+        return (
+            subprocess.check_output(["git", "rev-parse", "HEAD"])
+            .strip()
+            .decode("utf-8")
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return "Not a git repo"
 
 
 def log_environment_info(cfg: DictConfig):
-    """Log environment details to MLflow."""
+    """Logs hardware, OS, and package version info to MLflow."""
     env_info = {
-        "python_version": platform.python_version(),
         "platform": platform.platform(),
+        "python_version": platform.python_version(),
         "git_commit": get_git_commit(),
         "packages": {
-            m.__name__: m.__version__
-            for m in sys.modules.values()
-            if hasattr(m, "__version__")
+            dist.metadata["name"]: dist.version
+            for dist in importlib.metadata.distributions()
         },
-        "config": OmegaConf.to_container(cfg, resolve=True),
     }
+    # Filter to include only packages listed in pyproject.toml under dependencies
+    # This avoids logging every single package in the environment.
+    try:
+        import toml
+
+        with open("pyproject.toml", "r") as f:
+            pyproject = toml.load(f)
+        dependencies = (
+            pyproject.get("tool", {}).get("poetry", {}).get("dependencies", {})
+        )
+        relevant_packages = {
+            name: env_info["packages"].get(name)
+            for name in dependencies
+            if name in env_info["packages"]
+        }
+        env_info["packages"] = relevant_packages
+    except (FileNotFoundError, ImportError):
+        # If pyproject.toml or toml is not available, log all packages
+        pass
+
     mlflow.log_dict(env_info, "environment.json")
-    logger.info("Logged environment and configuration details to MLflow.")
 
 
 def load_or_create_dataset(tokenizer, cfg: DictConfig) -> CleanClinicDataset:
-    """Load or create the dataset."""
-    model_name = Path(cfg.hparams.model_name_or_path).name
-    dataset_file = Path("data") / f"MIC_{model_name}_{cfg.dataset.doclevel}.pkl"
-    if dataset_file.exists():
-        logger.info(f"Loading dataset from: {dataset_file}")
-        with open(dataset_file, "rb") as f:
-            dataset = pickle.load(f)
-    else:
-        logger.info("Creating dataset")
-        dataset = CleanClinicDataset(
-            tokenizer=tokenizer,
-            task=cfg.dataset.task,
-            doclevel=cfg.dataset.doclevel,
-            clean=False,
-        )
-        os.makedirs(dataset_file.parent, exist_ok=True)
-        with open(dataset_file, "wb") as f:
+    """Loads or creates the dataset based on the provided config."""
+    data_path = Path(cfg.dataset.get("path", None) or Path.cwd() / "data")
+    preprocessed_pickle_path = data_path / "medindcls_medbert_letter_clean.pkl"
+
+    if preprocessed_pickle_path.exists():
+        logger.info(f"Loading pre-processed dataset from {preprocessed_pickle_path}")
+
+        # Workaround for pickle loading error due to module path change
+        # The pickle was created when CleanClinicDataset was in a 'clinic_datasets' module
+        # We need to map 'clinic_datasets' to the new module path 'bertgcn.clinic_datasets'
+        from bertgcn import clinic_datasets
+
+        sys.modules["clinic_datasets"] = clinic_datasets
+
+        with open(preprocessed_pickle_path, "rb") as f:
+            return pickle.load(f)
+
+    # Fallback to original creation logic if the main pickle file is not found
+    logger.warning(
+        f"Pre-processed pickle not found at {preprocessed_pickle_path}. "
+        "Attempting to create dataset from source CSV. This will fail if the CSV is missing."
+    )
+    doclevel = cfg.dataset.doclevel
+    dev_limit = cfg.dataset.get("dev_limit", None)
+    clean = cfg.dataset.get("clean", True)
+
+    # The cache path will be unique for each combination of dataset parameters
+    cache_path = (
+        data_path / f"cached_dataset_{doclevel}_{dev_limit if dev_limit else 'all'}.pkl"
+    )
+
+    if cfg.dataset.get("use_cache", True) and cache_path.exists():
+        logger.info(f"Loading cached dataset from {cache_path}")
+        with open(cache_path, "rb") as f:
+            return pickle.load(f)
+
+    logger.info("Creating dataset from CSV...")
+    dataset = CleanClinicDataset(
+        tokenizer=tokenizer,
+        doclevel=doclevel,
+        dev_limit=dev_limit,
+        clean=clean,
+        file_path=data_path / "med_indication_all_RF_diag.csv",
+    )
+
+    if cfg.dataset.get("use_cache", True):
+        logger.info(f"Saving dataset to cache: {cache_path}")
+        with open(cache_path, "wb") as f:
             pickle.dump(dataset, f)
+
     return dataset
 
 
@@ -98,9 +154,9 @@ def split_dataset(
     if not cfg.dataset.test_unclear:
         train_end = int(len(idx) * cfg.dataset.train_ratio)
         val_end = train_end + int(len(idx) * cfg.dataset.val_ratio)
-        train_idx = idx[:train_end]
-        val_idx = idx[train_end:val_end]
-        test_idx = idx[val_end:]
+        train_idx = idx[:train_end].tolist()
+        val_idx = idx[train_end:val_end].tolist()
+        test_idx = idx[val_end:].tolist()
     else:
         train_val_idx, test_idx = [], []
         for i, x in enumerate(dataset):
@@ -178,7 +234,7 @@ def setup_trainer(
     """Configure and return a Hugging Face Trainer."""
     training_args = TrainingArguments(
         output_dir=output_dir,
-        evaluation_strategy=IntervalStrategy.STEPS,
+        eval_strategy=IntervalStrategy.STEPS,
         eval_steps=cfg.hparams.eval_steps,
         save_strategy=IntervalStrategy.STEPS,
         save_steps=cfg.hparams.save_steps,
@@ -209,7 +265,6 @@ def setup_trainer(
     )
 
 
-@hydra.main(config_path="conf", config_name="config", version_base=None)
 def main(cfg: DictConfig) -> float:
     """Main training and evaluation pipeline."""
     setup_environment(cfg.hparams.seed)
@@ -221,6 +276,7 @@ def main(cfg: DictConfig) -> float:
     with mlflow.start_run() as run:
         logger.info(f"Starting run: {run.info.run_name}")
         logger.info(f"Output directory: {output_dir}")
+        mlflow.set_tag("doclevel", cfg.dataset.doclevel)
         log_environment_info(cfg)
         mlflow.log_params(OmegaConf.to_container(cfg.hparams, resolve=True))
 
@@ -255,5 +311,14 @@ def main(cfg: DictConfig) -> float:
         return test_results.get("eval_f1", 0.0)
 
 
+import hydra
+from omegaconf import DictConfig
+
+
+@hydra.main(config_path="../../conf", config_name="config", version_base=None)
+def hydra_entry(cfg: DictConfig) -> None:
+    main(cfg)
+
+
 if __name__ == "__main__":
-    main()
+    hydra_entry()

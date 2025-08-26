@@ -1,0 +1,8 @@
+# Main config for BertGCN
+# Add any global settings here
+
+project_name: "BertGCN"
+mlflow_experiment_name: "bertgcn_finetuning"
+testonly: false
+
+# Add more global config options as needed
