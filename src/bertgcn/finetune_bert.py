@@ -1,170 +1,140 @@
-"""
-Fine-tune a Hugging Face Transformer model for sequence classification.
+"""Minimal BERT fine-tuning script with MLflow logging and performance tweaks.
 
-This script is designed for MLOps workflows, integrating:
-- Hydra for configuration management.
-- MLflow for experiment tracking.
+MLflow storage:
+    Tracking URI: <project_root>/mlruns
+    Launch UI: mlflow ui --backend-store-uri mlruns
+
+Features:
+    - Stratified train/val/test split
+    - Optional class weighting
+    - Macro F1 / precision / recall metrics
+    - Confusion matrix artifact
+
+Edit CONFIG SECTION to adjust hyperparameters.
 """
 
-import importlib.metadata
-import os
-import platform
-import shutil
-import subprocess
+from __future__ import annotations
+
+import inspect
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Dict, Tuple
 
-import hydra
 import joblib
 import mlflow
 import numpy as np
-import pandas as pd
-import shap
-import toml
+import torch
 from datasets import Dataset, load_from_disk
-from lime.lime_text import LimeTextExplainer
-
-try:
-    import matplotlib.pyplot as plt  # used for SHAP bar plot
-except Exception:  # matplotlib may not be installed in minimal environments
-    plt = None
-from omegaconf import DictConfig, OmegaConf
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Subset
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
-    EarlyStoppingCallback,
     Trainer,
     TrainingArguments,
     set_seed,
 )
 from transformers.training_args import IntervalStrategy
 
-# Ensure custom Hydra resolvers (e.g., basename) are registered before @hydra.main
-from bertgcn import hydra_resolvers  # noqa: F401
-from bertgcn.core import get_logger, setup_environment
 
-logger = get_logger(__name__)
+def _get_logger():
+    import logging
 
-
-def get_git_commit() -> str:
-    """Returns the current git commit hash, or 'Not a git repo' if not in a git repo."""
-    try:
-        return (
-            subprocess.check_output(["git", "rev-parse", "HEAD"])
-            .strip()
-            .decode("utf-8")
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return "Not a git repo"
-
-
-def log_environment_info(cfg: DictConfig):
-    """Logs hardware, OS, and package version info to MLflow."""
-    env_info = {
-        "platform": platform.platform(),
-        "python_version": platform.python_version(),
-        "git_commit": get_git_commit(),
-    }
-
-    # Add package versions, filtered by pyproject.toml
-    try:
-        with open("pyproject.toml", "r") as f:
-            pyproject = toml.load(f)
-
-        dependencies = (
-            pyproject.get("tool", {}).get("poetry", {}).get("dependencies", {})
-        )
-
-        package_versions = {
-            dist.metadata["name"]: dist.version
-            for dist in importlib.metadata.distributions()
-        }
-
-        relevant_packages = {
-            name: package_versions.get(name, "Not Found")
-            for name in dependencies
-            if name != "python"  # Exclude python itself
-        }
-        env_info["packages"] = relevant_packages
-
-    except (FileNotFoundError, ImportError) as e:
-        logger.warning(f"Could not log package versions: {e}")
-        env_info["packages"] = "Could not be determined"
-
-    mlflow.log_dict(env_info, "environment.json")
-
-
-def load_processed_dataset(
-    cfg: DictConfig,
-) -> Tuple[Dataset, Dataset, LabelEncoder, LabelEncoder]:
-    """Loads the preprocessed dataset and label encoders from disk.
-
-    Returns a tuple of (trainer_dataset, raw_dataset_with_text, label_encoder, meds_label_encoder).
-    The trainer dataset has torch format; the raw dataset retains the 'text' column for XAI.
-    """
-    data_path = Path(
-        cfg.dataset.get("processed_path", Path.cwd() / "data" / "processed")
+    logging.basicConfig(
+        format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
     )
-    dataset_path = data_path / "tokenized_dataset"
-    le_path = data_path / "label_encoder.joblib"
-    meds_le_path = data_path / "meds_label_encoder.joblib"
+    return logging.getLogger("finetune_min")
 
-    if not dataset_path.exists() or not le_path.exists() or not meds_le_path.exists():
+
+logger = _get_logger()
+
+
+######################## CONFIG SECTION ########################
+MODEL_NAME_OR_PATH = "/prj/doctoral_letters/PETGUI/med_bert_local"
+PROCESSED_DIR = Path("data/processed")
+TRAIN_RATIO = 0.8
+VAL_RATIO = 0.1  # remainder becomes test
+SEED = 42
+LEARNING_RATE = 1e-5  # lowered for stability
+BATCH_SIZE = 16
+NUM_EPOCHS = 6  # more epochs
+WEIGHT_DECAY = 0.01
+WARMUP_RATIO = 0.06
+LOGGING_STEPS = 50
+MLFLOW_EXPERIMENT_NAME = "bertgcn_finetuning_minimal"
+USE_STRATIFIED_SPLIT = True
+USE_CLASS_WEIGHTS = True
+################################################################
+
+
+def load_processed_dataset() -> Tuple[Dataset, LabelEncoder]:
+    dataset_path = PROCESSED_DIR / "tokenized_dataset"
+    le_path = PROCESSED_DIR / "label_encoder.joblib"
+    if not dataset_path.exists() or not le_path.exists():
         logger.error(
-            f"Processed data not found in {data_path}. "
-            "Please run the preprocessing script first: "
-            "`poetry run python -m bertgcn.preprocess`"
+            f"Missing processed data in {PROCESSED_DIR}. Run preprocessing first."
         )
         sys.exit(1)
-
-    logger.info(f"Loading processed dataset from {dataset_path}")
-    raw_dataset = load_from_disk(str(dataset_path))
-
-    logger.info("Loading label encoders")
-    le = joblib.load(le_path)
-    meds_le = joblib.load(meds_le_path)
-
-    trainer_dataset = raw_dataset.remove_columns(
-        [c for c in ["text"] if c in raw_dataset.column_names]
+    ds = load_from_disk(str(dataset_path))
+    le: LabelEncoder = joblib.load(le_path)
+    trainer_ds = ds.remove_columns(
+        [c for c in ["text", "medication_name"] if c in ds.column_names]
     )
-    trainer_dataset.set_format(
+    trainer_ds.set_format(
         type="torch", columns=["input_ids", "attention_mask", "labels", "med_id"]
     )
+    return trainer_ds, le
 
-    return trainer_dataset, raw_dataset, le, meds_le
 
+def split_dataset(dataset: Dataset):
+    labels = np.array(dataset["labels"])  # assumes labels column exists
+    n = len(labels)
+    indices = np.arange(n)
 
-def split_dataset(
-    dataset: Dataset, le: LabelEncoder, cfg: DictConfig
-) -> Tuple[Subset, Subset, Subset]:
-    """Split the dataset into train, validation, and test sets based on config."""
-    idx = np.arange(len(dataset))
-    np.random.shuffle(idx)
+    def random_split():
+        rng = np.random.default_rng(SEED)
+        rng.shuffle(indices)
+        train_end = int(n * TRAIN_RATIO)
+        val_end = train_end + int(n * VAL_RATIO)
+        return indices[:train_end], indices[train_end:val_end], indices[val_end:]
 
-    if not cfg.dataset.test_unclear:
-        train_end = int(len(idx) * cfg.dataset.train_ratio)
-        val_end = train_end + int(len(idx) * cfg.dataset.val_ratio)
-        train_idx = idx[:train_end].tolist()
-        val_idx = idx[train_end:val_end].tolist()
-        test_idx = idx[val_end:].tolist()
+    if USE_STRATIFIED_SPLIT:
+        min_class = min(Counter(labels).values())
+        if min_class < 2:
+            logger.warning(
+                f"Skipping stratified split: smallest class count={min_class} < 2."
+            )
+            train_idx, val_idx, test_idx = random_split()
+        else:
+            try:
+                from sklearn.model_selection import train_test_split
+
+                train_idx, temp_idx = train_test_split(
+                    indices,
+                    test_size=1 - TRAIN_RATIO,
+                    stratify=labels,
+                    random_state=SEED,
+                )
+                val_ratio_adj = VAL_RATIO / (1 - TRAIN_RATIO)
+                val_idx, test_idx = train_test_split(
+                    temp_idx,
+                    test_size=1 - val_ratio_adj,
+                    stratify=labels[temp_idx],
+                    random_state=SEED,
+                )
+            except Exception as e:
+                logger.warning(f"Stratified split failed ({e}); using random split.")
+                train_idx, val_idx, test_idx = random_split()
     else:
-        train_val_idx, test_idx = [], []
-        for i in idx:
-            # We need to get the label name to check for "unklar"
-            # This is less efficient than having a dedicated column, but works.
-            label_name = le.inverse_transform([dataset[int(i)]["label_id"]])[0]
-            if "unklar" in label_name:
-                test_idx.append(int(i))
-            else:
-                train_val_idx.append(int(i))
+        train_idx, val_idx, test_idx = random_split()
 
-        np.random.shuffle(train_val_idx)
-        split_idx = int(len(train_val_idx) * cfg.dataset.train_val_split_ratio)
-        train_idx = train_val_idx[:split_idx]
-        val_idx = train_val_idx[split_idx:]
+    # Log distribution per split
+    for name, idxs in [("train", train_idx), ("val", val_idx), ("test", test_idx)]:
+        dist = Counter(labels[idxs])
+        logger.info(
+            f"Split {name}: n={len(idxs)} distinct_classes={len(dist)} sample_dist={dict(list(dist.items())[:10])}"
+        )
 
     return (
         Subset(dataset, train_idx),
@@ -173,270 +143,216 @@ def split_dataset(
     )
 
 
+def compute_class_weights(labels: np.ndarray):
+    if not USE_CLASS_WEIGHTS:
+        return None
+    try:
+        from sklearn.utils.class_weight import compute_class_weight
+
+        classes = np.unique(labels)
+        weights = compute_class_weight(
+            class_weight="balanced", classes=classes, y=labels
+        )
+        full = np.zeros(len(classes), dtype=np.float32)
+        for i, c in enumerate(classes):
+            full[c] = weights[i]
+        tensor = torch.tensor(full, dtype=torch.float32)
+        # Clip extreme weights to stabilize training if there's a very rare class
+        if tensor.numel() > 0:
+            median = tensor.median()
+            if median > 0:
+                max_allowed = median * 10.0  # allow up to 10x the median
+                if (tensor > max_allowed).any():
+                    tensor = torch.clamp(tensor, max=max_allowed)
+                    logger.info(
+                        f"Clipped class weights to max {max_allowed.item():.4f} to avoid instability"
+                    )
+        logger.info(f"Class weights (possibly clipped): {tensor.tolist()}")
+        return tensor
+    except Exception as e:
+        logger.warning(f"Class weights failed: {e}")
+        return None
+
+
 def compute_metrics(eval_pred) -> Dict[str, float]:
-    """Compute and return metrics for evaluation."""
     logits, labels = eval_pred
-    predictions = np.argmax(logits, axis=1)
-    from sklearn.metrics import f1_score, precision_score, recall_score
+    preds = np.argmax(logits, axis=1)
+    from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score
 
     return {
-        "accuracy": np.mean(predictions == labels),
-        "f1": f1_score(labels, predictions, average="macro", zero_division=0),
-        "precision": precision_score(
-            labels, predictions, average="macro", zero_division=0
-        ),
-        "recall": recall_score(labels, predictions, average="macro", zero_division=0),
+        "accuracy": accuracy_score(labels, preds),
+        "f1": f1_score(labels, preds, average="macro", zero_division=0),
+        "precision": precision_score(labels, preds, average="macro", zero_division=0),
+        "recall": recall_score(labels, preds, average="macro", zero_division=0),
     }
 
 
-def log_explainability_artifacts(
-    trainer: Trainer,
-    raw_dataset: Dataset,
-    output_dir: str,
-    le: LabelEncoder,
-    cfg: DictConfig,
-):
-    """Generate and log SHAP and LIME explainability reports if enabled."""
-    if not cfg.xai.enabled:
-        logger.info("XAI disabled; skipping SHAP/LIME generation.")
-        return
+class WeightedTrainer(Trainer):
+    def __init__(self, class_weights=None, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.class_weights = class_weights
 
-    try:
-        import torch  # local import to avoid unnecessary dependency at import time
+    def compute_loss(
+        self, model, inputs, return_outputs=False, **kwargs
+    ):  # type: ignore[override]
+        """Override to apply optional class weights.
 
-        logger.info("Generating explainability reports (SHAP & LIME)...")
-
-        model = trainer.model
-        tokenizer = trainer.tokenizer
-        class_names = list(le.classes_)
-        # Ensure model config has id2label/label2id for nicer outputs
-        model.config.id2label = {i: n for i, n in enumerate(class_names)}
-        model.config.label2id = {n: i for i, n in enumerate(class_names)}
-
-        # Collect texts
-        if "text" not in raw_dataset.column_names:
-            logger.warning("Raw dataset has no 'text' column; cannot compute XAI.")
-            return
-        texts = raw_dataset["text"]
-
-        rng = np.random.RandomState(cfg.xai.seed)
-        # Sample indices (avoid exceeding dataset size)
-        total_n = len(texts)
-        shap_bg_n = min(cfg.xai.shap_num_background, total_n)
-        shap_sample_n = min(cfg.xai.shap_num_samples, total_n)
-        lime_sample_n = min(cfg.xai.lime_num_samples, total_n)
-        bg_indices = rng.choice(total_n, size=shap_bg_n, replace=False)
-        shap_indices = rng.choice(total_n, size=shap_sample_n, replace=False)
-        lime_indices = rng.choice(total_n, size=lime_sample_n, replace=False)
-
-        background_texts = [texts[i] for i in bg_indices]
-        shap_texts = [texts[i] for i in shap_indices]
-        lime_texts = [texts[i] for i in lime_indices]
-
-        max_len = cfg.xai.max_tokens_for_xai
-
-        def predict_proba(raw_text_list):
-            enc = tokenizer(
-                raw_text_list,
-                truncation=True,
-                padding=True,
-                max_length=max_len,
-                return_tensors="pt",
-            )
-            enc = {k: v.to(model.device) for k, v in enc.items()}
-            with torch.no_grad():
-                outputs = model(**enc)
-                probs = torch.softmax(outputs.logits, dim=-1)
-            return probs.cpu().numpy()
-
-        xai_dir = Path(output_dir) / "xai"
-        shap_dir = xai_dir / "shap"
-        lime_dir = xai_dir / "lime"
-        shap_dir.mkdir(parents=True, exist_ok=True)
-        lime_dir.mkdir(parents=True, exist_ok=True)
-
-        # SHAP
-        logger.info("Computing SHAP values...")
-        try:
-            masker = shap.maskers.Text(tokenizer)
-            explainer = shap.Explainer(predict_proba, masker, output_names=class_names)
-            shap_values = explainer(shap_texts)
-            # Save summary bar (importance) plot
-            try:
-                bar_path = shap_dir / "shap_bar_summary.png"
-                shap.plots.bar(shap_values, max_display=20, show=False)
-                import matplotlib.pyplot as plt
-
-                plt.tight_layout()
-                plt.savefig(bar_path, dpi=150)
-                plt.close()
-            except Exception as e:
-                logger.warning(f"Could not save SHAP bar plot: {e}")
-            # Save individual text plots (HTML)
-            for i, sv in enumerate(shap_values):
-                try:
-                    html_path = shap_dir / f"shap_text_{i}.html"
-                    shap.plots.text(sv, display=False).save_html(str(html_path))
-                except Exception:
-                    # Fallback: raw strings
-                    with open(shap_dir / f"shap_text_{i}.txt", "w") as f:
-                        f.write(str(sv))
-        except Exception as e:
-            logger.warning(f"SHAP computation failed: {e}")
-
-        # LIME
-        logger.info("Computing LIME explanations...")
-        try:
-            lime_explainer = LimeTextExplainer(class_names=class_names)
-            for i, txt in enumerate(lime_texts):
-                try:
-                    exp = lime_explainer.explain_instance(
-                        txt,
-                        predict_proba,
-                        num_features=20,
-                        labels=[0],  # we will still save full HTML
-                    )
-                    out_path = lime_dir / f"lime_text_{i}.html"
-                    exp.save_to_file(str(out_path))
-                except Exception as inner:
-                    logger.warning(f"LIME explanation failed for sample {i}: {inner}")
-        except Exception as e:
-            logger.warning(f"LIME computation failed: {e}")
-
-        # Simple manifest
-        manifest = {
-            "shap_background_indices": bg_indices.tolist(),
-            "shap_sample_indices": shap_indices.tolist(),
-            "lime_sample_indices": lime_indices.tolist(),
-            "class_names": class_names,
-        }
-        import json
-
-        with open(xai_dir / "manifest.json", "w") as f:
-            json.dump(manifest, f, indent=2)
-
-        # Log entire XAI directory to MLflow if possible
-        try:
-            mlflow.log_artifacts(str(xai_dir), artifact_path="xai")
-        except Exception as e:
-            logger.warning(f"Failed to log XAI artifacts to MLflow: {e}")
-
-        logger.info(
-            "Explainability artifacts generated and (attempted) MLflow logging complete."
+        Accepts **kwargs to maintain compatibility with newer Trainer versions
+        that may pass additional arguments (e.g., num_items_in_batch).
+        """
+        labels = inputs.get("labels")
+        outputs = model(
+            input_ids=inputs.get("input_ids"),
+            attention_mask=inputs.get("attention_mask"),
+            labels=None,
         )
-    except Exception as e:
-        logger.warning(f"Failed to generate explainability artifacts: {e}")
+        logits = outputs.logits
+        if self.class_weights is not None:
+            class_w = self.class_weights.to(logits.device)
+            # Safety clamp (should already be clipped earlier, but double safety)
+            median = class_w.median()
+            if median > 0:
+                class_w = torch.clamp(class_w, max=median * 10.0)
+            loss_fct = torch.nn.CrossEntropyLoss(weight=class_w)
+        else:
+            loss_fct = torch.nn.CrossEntropyLoss()
+
+        loss = loss_fct(logits, labels)
+        return (loss, outputs) if return_outputs else loss
 
 
-def setup_trainer(
-    model: AutoModelForSequenceClassification,
-    tokenizer: AutoTokenizer,
-    train_dataset: Subset,
-    val_dataset: Subset,
-    cfg: DictConfig,
-    output_dir: str,
-) -> Trainer:
-    """Configure and return a Hugging Face Trainer."""
-    training_args = TrainingArguments(
-        output_dir=output_dir,
-        eval_strategy=IntervalStrategy.STEPS,
-        eval_steps=cfg.hparams.eval_steps,
-        save_strategy=IntervalStrategy.STEPS,
-        save_steps=cfg.hparams.save_steps,
-        learning_rate=cfg.hparams.learning_rate,
-        per_device_train_batch_size=cfg.hparams.batch_size,
-        per_device_eval_batch_size=cfg.hparams.batch_size,
-        num_train_epochs=cfg.hparams.num_train_epochs,
-        weight_decay=cfg.hparams.weight_decay,
+def setup_trainer(model, tokenizer, train_ds, val_ds, out_dir: str, class_weights=None):
+    # Build TrainingArguments with backward compatibility for older Transformers versions
+    base_kwargs = dict(
+        output_dir=out_dir,
+        save_strategy=IntervalStrategy.EPOCH,
+        learning_rate=LEARNING_RATE,
+        per_device_train_batch_size=BATCH_SIZE,
+        per_device_eval_batch_size=BATCH_SIZE,
+        num_train_epochs=NUM_EPOCHS,
+        weight_decay=WEIGHT_DECAY,
+        warmup_ratio=WARMUP_RATIO,
         load_best_model_at_end=True,
         metric_for_best_model="f1",
-        fp16=cfg.hparams.fp16,
-        gradient_accumulation_steps=cfg.hparams.gradient_accumulation_steps,
-        warmup_ratio=cfg.hparams.warmup_ratio,
-        logging_dir=f"{output_dir}/tensorboard",
-        logging_steps=50,
-        save_total_limit=3,
-        report_to=["mlflow", "tensorboard"],
+        greater_is_better=True,
+        logging_steps=LOGGING_STEPS,
+        save_total_limit=2,
+        report_to=["mlflow"],
     )
-
-    # The default data collator will handle padding and tensor conversion
-    return Trainer(
+    sig = inspect.signature(TrainingArguments.__init__)
+    if "evaluation_strategy" in sig.parameters:
+        base_kwargs["evaluation_strategy"] = IntervalStrategy.EPOCH
+    elif "eval_strategy" in sig.parameters:  # legacy name
+        base_kwargs["eval_strategy"] = IntervalStrategy.EPOCH
+    else:
+        logger.warning(
+            "No evaluation/eval_strategy parameter detected; evaluations will rely on default settings."
+        )
+    args = TrainingArguments(**base_kwargs)
+    trainer_cls = WeightedTrainer if class_weights is not None else Trainer
+    return trainer_cls(
         model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
+        args=args,
+        train_dataset=train_ds,
+        eval_dataset=val_ds,
         tokenizer=tokenizer,
         compute_metrics=compute_metrics,
+        class_weights=class_weights if class_weights is not None else None,
     )
 
 
-def main(cfg: DictConfig) -> float:
-    """Main training and evaluation pipeline."""
-    setup_environment(cfg.hparams.seed)
-    set_seed(cfg.hparams.seed)
-    # Fallback: if custom resolver 'basename' failed to register, emulate its effect
-    try:
-        output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
-    except Exception as e:  # pragma: no cover - defensive
-        # Reconstruct a sane output path manually
-        model_base = Path(cfg.hparams.model_name_or_path).name
-        timestamp = "manual"  # minimal fallback; could inject datetime if needed
-        output_dir = str(Path("outputs") / "finetuned" / model_base / timestamp)
-        os.makedirs(output_dir, exist_ok=True)
-        logger.warning(
-            "Hydra output_dir retrieval failed (resolver issue?). Using fallback path %s (%s)",
-            output_dir,
-            e,
+def main():
+    set_seed(SEED)
+    project_root = Path(__file__).resolve().parents[2]
+    tracking_uri = project_root / "mlruns"
+    mlflow.set_tracking_uri(str(tracking_uri))
+    mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
+    out_dir = project_root / "outputs" / "finetuned" / Path(MODEL_NAME_OR_PATH).name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"MLflow tracking URI: {tracking_uri}")
+
+    dataset, le = load_processed_dataset()
+    train_ds, val_ds, test_ds = split_dataset(dataset)
+    # Efficient label extraction for class weights
+    train_indices_int = [int(i) for i in train_ds.indices]
+    train_labels = np.array(dataset.select(train_indices_int)["labels"])
+    class_weights = compute_class_weights(train_labels)
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME_OR_PATH)
+    model = AutoModelForSequenceClassification.from_pretrained(
+        MODEL_NAME_OR_PATH, num_labels=len(le.classes_)
+    )
+    model.config.id2label = {i: lab for i, lab in enumerate(le.classes_)}
+    model.config.label2id = {lab: i for i, lab in enumerate(le.classes_)}
+
+    trainer = setup_trainer(
+        model, tokenizer, train_ds, val_ds, str(out_dir), class_weights=class_weights
+    )
+
+    with mlflow.start_run():
+        mlflow.log_params(
+            {
+                "model_name_or_path": MODEL_NAME_OR_PATH,
+                "learning_rate": LEARNING_RATE,
+                "batch_size": BATCH_SIZE,
+                "epochs": NUM_EPOCHS,
+                "weight_decay": WEIGHT_DECAY,
+                "warmup_ratio": WARMUP_RATIO,
+                "seed": SEED,
+                "stratified_split": USE_STRATIFIED_SPLIT,
+                "class_weights": USE_CLASS_WEIGHTS,
+            }
         )
-
-    mlflow.set_experiment(cfg.mlflow_experiment_name)
-    with mlflow.start_run() as run:
-        logger.info(f"Starting run: {run.info.run_name}")
-        logger.info(f"Output directory: {output_dir}")
-        mlflow.set_tag("doclevel", cfg.dataset.doclevel)
-        log_environment_info(cfg)
-        mlflow.log_params(OmegaConf.to_container(cfg.hparams, resolve=True))
-        tokenizer = AutoTokenizer.from_pretrained(cfg.hparams.model_name_or_path)
-
-        # Load the pre-processed dataset (trainer + raw for XAI)
-        trainer_dataset, raw_dataset, le, _ = load_processed_dataset(cfg)
-
-        train_dataset, val_dataset, test_dataset = split_dataset(
-            trainer_dataset, le, cfg
+        logger.info("Training...")
+        trainer.train()
+        logger.info("Validation metrics (best model):")
+        val_metrics = trainer.evaluate()
+        mlflow.log_metrics(
+            {
+                f"val_{k}": float(v)
+                for k, v in val_metrics.items()
+                if isinstance(v, (int, float))
+            }
         )
-
-        model = AutoModelForSequenceClassification.from_pretrained(
-            cfg.hparams.model_name_or_path, num_labels=len(le.classes_)
-        )
-
-        trainer = setup_trainer(
-            model, tokenizer, train_dataset, val_dataset, cfg, output_dir
-        )
-
-        if not cfg.testonly:
-            logger.info("Starting training...")
-            trainer.train()
-            logger.info(f"Saving best model to {output_dir}")
-            trainer.save_model(output_dir)
-            tokenizer.save_pretrained(output_dir)
+        logger.info(str(val_metrics))
 
         logger.info("Evaluating on test set...")
-        test_results = trainer.evaluate(test_dataset)
-        logger.info(f"Test results: {test_results}")
+        test_metrics = trainer.evaluate(test_ds)
+        mlflow.log_metrics(
+            {
+                f"test_{k}": float(v)
+                for k, v in test_metrics.items()
+                if isinstance(v, (int, float))
+            }
+        )
+        logger.info(str(test_metrics))
 
-        # Generate explainability artifacts
-        log_explainability_artifacts(trainer, raw_dataset, output_dir, le, cfg)
+        # Confusion matrix
+        try:
+            from sklearn.metrics import confusion_matrix
 
-    logger.info("Fine-tuning completed.")
+            test_output = trainer.predict(test_ds)
+            preds = np.argmax(test_output.predictions, axis=1)
+            labels = test_output.label_ids
+            cm = confusion_matrix(labels, preds)
+            import json
 
-    # For Hydra's Optuna Sweeper
-    return test_results.get("eval_f1", 0.0)
+            cm_path = out_dir / "confusion_matrix.json"
+            with open(cm_path, "w") as f:
+                json.dump(
+                    {"matrix": cm.tolist(), "labels": le.classes_.tolist()}, f, indent=2
+                )
+            mlflow.log_artifact(str(cm_path), artifact_path="evaluation")
+        except Exception as e:  # pragma: no cover
+            logger.warning(f"Confusion matrix logging skipped: {e}")
 
+        trainer.save_model(str(out_dir))
+        tokenizer.save_pretrained(str(out_dir))
+        mlflow.log_artifacts(str(out_dir), artifact_path="model")
+        logger.info("Done. Launch MLflow UI with: mlflow ui --backend-store-uri mlruns")
 
-@hydra.main(config_path="../../conf", config_name="config", version_base=None)
-def hydra_entry(cfg: DictConfig) -> None:
-    main(cfg)
+    return 0
 
 
 if __name__ == "__main__":
-    hydra_entry()
+    main()
