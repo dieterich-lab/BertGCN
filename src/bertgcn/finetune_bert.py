@@ -4,14 +4,12 @@ Fine-tune a Hugging Face Transformer model for sequence classification.
 This script is designed for MLOps workflows, integrating:
 - Hydra for configuration management.
 - MLflow for experiment tracking.
-- Hugging Face Trainer for efficient training.
-- SHAP and LIME for model explainability.
-- Optuna (via Hydra) for hyperparameter sweeping.
 """
 
 import importlib.metadata
 import os
 import platform
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -44,6 +42,8 @@ from transformers import (
 )
 from transformers.training_args import IntervalStrategy
 
+# Ensure custom Hydra resolvers (e.g., basename) are registered before @hydra.main
+from bertgcn import hydra_resolvers  # noqa: F401
 from bertgcn.core import get_logger, setup_environment
 
 logger = get_logger(__name__)
@@ -314,7 +314,16 @@ def log_explainability_artifacts(
 
         with open(xai_dir / "manifest.json", "w") as f:
             json.dump(manifest, f, indent=2)
-        logger.info("Explainability artifacts generated.")
+
+        # Log entire XAI directory to MLflow if possible
+        try:
+            mlflow.log_artifacts(str(xai_dir), artifact_path="xai")
+        except Exception as e:
+            logger.warning(f"Failed to log XAI artifacts to MLflow: {e}")
+
+        logger.info(
+            "Explainability artifacts generated and (attempted) MLflow logging complete."
+        )
     except Exception as e:
         logger.warning(f"Failed to generate explainability artifacts: {e}")
 
@@ -365,8 +374,20 @@ def main(cfg: DictConfig) -> float:
     """Main training and evaluation pipeline."""
     setup_environment(cfg.hparams.seed)
     set_seed(cfg.hparams.seed)
-
-    output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
+    # Fallback: if custom resolver 'basename' failed to register, emulate its effect
+    try:
+        output_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
+    except Exception as e:  # pragma: no cover - defensive
+        # Reconstruct a sane output path manually
+        model_base = Path(cfg.hparams.model_name_or_path).name
+        timestamp = "manual"  # minimal fallback; could inject datetime if needed
+        output_dir = str(Path("outputs") / "finetuned" / model_base / timestamp)
+        os.makedirs(output_dir, exist_ok=True)
+        logger.warning(
+            "Hydra output_dir retrieval failed (resolver issue?). Using fallback path %s (%s)",
+            output_dir,
+            e,
+        )
 
     mlflow.set_experiment(cfg.mlflow_experiment_name)
     with mlflow.start_run() as run:
@@ -406,10 +427,10 @@ def main(cfg: DictConfig) -> float:
         # Generate explainability artifacts
         log_explainability_artifacts(trainer, raw_dataset, output_dir, le, cfg)
 
-        logger.info("Fine-tuning completed.")
+    logger.info("Fine-tuning completed.")
 
-        # For Hydra's Optuna Sweeper
-        return test_results.get("eval_f1", 0.0)
+    # For Hydra's Optuna Sweeper
+    return test_results.get("eval_f1", 0.0)
 
 
 @hydra.main(config_path="../../conf", config_name="config", version_base=None)

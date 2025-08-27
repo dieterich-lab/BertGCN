@@ -18,6 +18,7 @@ from omegaconf import DictConfig
 from sklearn.preprocessing import LabelEncoder
 from transformers import AutoTokenizer
 
+from bertgcn import hydra_resolvers  # noqa: F401 ensure custom resolvers registered
 from bertgcn.core import get_logger
 
 logger = get_logger(__name__)
