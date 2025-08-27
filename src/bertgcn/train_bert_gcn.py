@@ -10,7 +10,6 @@ import optuna
 import pandas as pd
 import torch
 import torch.utils.data as Data
-from entry import *
 from ignite.engine import Engine, Events
 from ignite.handlers import Checkpoint, EarlyStopping, ModelCheckpoint
 
@@ -26,6 +25,7 @@ from transformers import AutoTokenizer
 from utils import *
 
 from bertgcn.clinic_datasets import CleanClinicDataset
+from bertgcn.config import DEFAULT_MODEL_PATH as PRETRAINEDMODEL
 
 args = parse_args()
 

@@ -128,14 +128,15 @@ def preprocess(cfg: DictConfig) -> None:
     hf_dataset = hf_dataset.map(
         process_and_tokenize,
         batched=True,
-        remove_columns=["text", "medication_name"],  # No longer needed
+        remove_columns=["medication_name"],  # Keep text for inspection
     )
 
-    # --- 5. Save Processed Dataset ---
-    dataset_path = output_dir / "tokenized_dataset"
-    hf_dataset.save_to_disk(dataset_path)
+    # --- 5. Save Processed Dataset and Tokenizer ---
+    dataset_path_str = str(output_dir / "tokenized_dataset")
+    hf_dataset.save_to_disk(dataset_path_str)
+    tokenizer.save_pretrained(dataset_path_str)  # Save tokenizer with the dataset
     logger.info(
-        f"Processed dataset with {len(hf_dataset)} rows saved to {dataset_path}"
+        f"Processed dataset with {len(hf_dataset)} rows saved to {dataset_path_str}"
     )
     logger.info(f"Final dataset columns: {hf_dataset.column_names}")
 
