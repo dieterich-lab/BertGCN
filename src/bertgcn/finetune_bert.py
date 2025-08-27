@@ -21,11 +21,14 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, Tuple
 
+import hydra
 import joblib
 import mlflow
 import numpy as np
 import torch
 from datasets import Dataset, load_from_disk
+from hydra.utils import get_original_cwd
+from omegaconf import DictConfig, OmegaConf
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Subset
 from transformers import (
@@ -35,7 +38,10 @@ from transformers import (
     TrainingArguments,
     set_seed,
 )
+from transformers.data.data_collator import DataCollatorWithPadding
 from transformers.training_args import IntervalStrategy
+
+OmegaConf.register_new_resolver("basename", lambda p: Path(p).name)
 
 
 def _get_logger():
@@ -44,36 +50,20 @@ def _get_logger():
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
     )
-    return logging.getLogger("finetune_min")
+    return logging.getLogger("finetune_bert")
 
 
 logger = _get_logger()
 
 
-######################## CONFIG SECTION ########################
-MODEL_NAME_OR_PATH = "/prj/doctoral_letters/PETGUI/med_bert_local"
-PROCESSED_DIR = Path("data/processed")
-TRAIN_RATIO = 0.8
-VAL_RATIO = 0.1  # remainder becomes test
-SEED = 42
-LEARNING_RATE = 1e-5  # lowered for stability
-BATCH_SIZE = 16
-NUM_EPOCHS = 6  # more epochs
-WEIGHT_DECAY = 0.01
-WARMUP_RATIO = 0.06
-LOGGING_STEPS = 50
-MLFLOW_EXPERIMENT_NAME = "bertgcn_finetuning_minimal"
-USE_STRATIFIED_SPLIT = True
-USE_CLASS_WEIGHTS = True
-################################################################
-
-
-def load_processed_dataset() -> Tuple[Dataset, LabelEncoder]:
-    dataset_path = PROCESSED_DIR / "tokenized_dataset"
-    le_path = PROCESSED_DIR / "label_encoder.joblib"
+def load_processed_dataset(cfg: DictConfig) -> Tuple[Dataset, LabelEncoder]:
+    project_root = Path(get_original_cwd())
+    processed_dir = project_root / "data" / "processed"
+    dataset_path = processed_dir / "tokenized_dataset"
+    le_path = processed_dir / "label_encoder.joblib"
     if not dataset_path.exists() or not le_path.exists():
         logger.error(
-            f"Missing processed data in {PROCESSED_DIR}. Run preprocessing first."
+            f"Missing processed data in {processed_dir}. Run preprocessing first."
         )
         sys.exit(1)
     ds = load_from_disk(str(dataset_path))
@@ -87,19 +77,23 @@ def load_processed_dataset() -> Tuple[Dataset, LabelEncoder]:
     return trainer_ds, le
 
 
-def split_dataset(dataset: Dataset):
+def split_dataset(dataset: Dataset, cfg: DictConfig):
     labels = np.array(dataset["labels"])  # assumes labels column exists
     n = len(labels)
     indices = np.arange(n)
+    train_ratio = cfg.dataset.train_ratio
+    val_ratio = cfg.dataset.val_ratio
+    seed = cfg.hparams.seed
+    use_stratified_split = cfg.hparams.use_stratified_split
 
     def random_split():
-        rng = np.random.default_rng(SEED)
+        rng = np.random.default_rng(seed)
         rng.shuffle(indices)
-        train_end = int(n * TRAIN_RATIO)
-        val_end = train_end + int(n * VAL_RATIO)
+        train_end = int(n * train_ratio)
+        val_end = train_end + int(n * val_ratio)
         return indices[:train_end], indices[train_end:val_end], indices[val_end:]
 
-    if USE_STRATIFIED_SPLIT:
+    if use_stratified_split:
         min_class = min(Counter(labels).values())
         if min_class < 2:
             logger.warning(
@@ -112,16 +106,16 @@ def split_dataset(dataset: Dataset):
 
                 train_idx, temp_idx = train_test_split(
                     indices,
-                    test_size=1 - TRAIN_RATIO,
+                    test_size=1 - train_ratio,
                     stratify=labels,
-                    random_state=SEED,
+                    random_state=seed,
                 )
-                val_ratio_adj = VAL_RATIO / (1 - TRAIN_RATIO)
+                val_ratio_adj = val_ratio / (1 - train_ratio)
                 val_idx, test_idx = train_test_split(
                     temp_idx,
                     test_size=1 - val_ratio_adj,
                     stratify=labels[temp_idx],
-                    random_state=SEED,
+                    random_state=seed,
                 )
             except Exception as e:
                 logger.warning(f"Stratified split failed ({e}); using random split.")
@@ -143,30 +137,44 @@ def split_dataset(dataset: Dataset):
     )
 
 
-def compute_class_weights(labels: np.ndarray):
-    if not USE_CLASS_WEIGHTS:
+def compute_class_weights(labels: np.ndarray, le: LabelEncoder, cfg: DictConfig):
+    if not cfg.hparams.use_class_weights:
         return None
     try:
         from sklearn.utils.class_weight import compute_class_weight
 
-        classes = np.unique(labels)
+        # Use all classes from the label encoder to determine the shape of the weights tensor
+        all_classes = np.arange(len(le.classes_))
+
+        # Calculate weights only for classes present in the provided labels
+        present_classes = np.unique(labels)
         weights = compute_class_weight(
-            class_weight="balanced", classes=classes, y=labels
+            class_weight="balanced", classes=present_classes, y=labels
         )
-        full = np.zeros(len(classes), dtype=np.float32)
-        for i, c in enumerate(classes):
-            full[c] = weights[i]
-        tensor = torch.tensor(full, dtype=torch.float32)
+
+        # Create a full weights tensor and populate it
+        full_weights = np.ones(
+            len(all_classes), dtype=np.float32
+        )  # Default to 1 for missing classes
+
+        # Map weights to their corresponding class indices
+        for cls_idx, weight in zip(present_classes, weights):
+            full_weights[cls_idx] = weight
+
+        tensor = torch.tensor(full_weights, dtype=torch.float32)
         # Clip extreme weights to stabilize training if there's a very rare class
         if tensor.numel() > 0:
-            median = tensor.median()
-            if median > 0:
-                max_allowed = median * 10.0  # allow up to 10x the median
-                if (tensor > max_allowed).any():
-                    tensor = torch.clamp(tensor, max=max_allowed)
-                    logger.info(
-                        f"Clipped class weights to max {max_allowed.item():.4f} to avoid instability"
-                    )
+            # Only consider weights of present classes for median calculation
+            present_weights = tensor[present_classes.astype(int)]
+            if present_weights.numel() > 0:
+                median = present_weights.median()
+                if median > 0:
+                    max_allowed = median * 10.0  # allow up to 10x the median
+                    if (tensor > max_allowed).any():
+                        tensor = torch.clamp(tensor, max=max_allowed)
+                        logger.info(
+                            f"Clipped class weights to max {max_allowed.item():.4f} to avoid instability"
+                        )
         logger.info(f"Class weights (possibly clipped): {tensor.tolist()}")
         return tensor
     except Exception as e:
@@ -221,21 +229,29 @@ class WeightedTrainer(Trainer):
         return (loss, outputs) if return_outputs else loss
 
 
-def setup_trainer(model, tokenizer, train_ds, val_ds, out_dir: str, class_weights=None):
+def setup_trainer(
+    model,
+    tokenizer,
+    train_ds,
+    val_ds,
+    out_dir: str,
+    cfg: DictConfig,
+    class_weights=None,
+):
     # Build TrainingArguments with backward compatibility for older Transformers versions
     base_kwargs = dict(
         output_dir=out_dir,
         save_strategy=IntervalStrategy.EPOCH,
-        learning_rate=LEARNING_RATE,
-        per_device_train_batch_size=BATCH_SIZE,
-        per_device_eval_batch_size=BATCH_SIZE,
-        num_train_epochs=NUM_EPOCHS,
-        weight_decay=WEIGHT_DECAY,
-        warmup_ratio=WARMUP_RATIO,
+        learning_rate=cfg.hparams.learning_rate,
+        per_device_train_batch_size=cfg.hparams.batch_size,
+        per_device_eval_batch_size=cfg.hparams.batch_size,
+        num_train_epochs=cfg.hparams.num_train_epochs,
+        weight_decay=cfg.hparams.weight_decay,
+        warmup_ratio=cfg.hparams.warmup_ratio,
         load_best_model_at_end=True,
         metric_for_best_model="f1",
         greater_is_better=True,
-        logging_steps=LOGGING_STEPS,
+        logging_steps=cfg.hparams.eval_steps,  # assuming eval_steps is used for logging
         save_total_limit=2,
         report_to=["mlflow"],
     )
@@ -250,57 +266,70 @@ def setup_trainer(model, tokenizer, train_ds, val_ds, out_dir: str, class_weight
         )
     args = TrainingArguments(**base_kwargs)
     trainer_cls = WeightedTrainer if class_weights is not None else Trainer
-    return trainer_cls(
-        model=model,
-        args=args,
-        train_dataset=train_ds,
-        eval_dataset=val_ds,
-        tokenizer=tokenizer,
-        compute_metrics=compute_metrics,
-        class_weights=class_weights if class_weights is not None else None,
-    )
+    data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
+
+    trainer_args = {
+        "model": model,
+        "args": args,
+        "train_dataset": train_ds,
+        "eval_dataset": val_ds,
+        "tokenizer": tokenizer,
+        "data_collator": data_collator,
+        "compute_metrics": compute_metrics,
+    }
+    if class_weights is not None:
+        trainer_args["class_weights"] = class_weights
+
+    return trainer_cls(**trainer_args)
 
 
-def main():
-    set_seed(SEED)
-    project_root = Path(__file__).resolve().parents[2]
+@hydra.main(version_base=None, config_path="../../conf", config_name="config")
+def main(cfg: DictConfig):
+    set_seed(cfg.hparams.seed)
+    project_root = Path(get_original_cwd())
     tracking_uri = project_root / "mlruns"
     mlflow.set_tracking_uri(str(tracking_uri))
-    mlflow.set_experiment(MLFLOW_EXPERIMENT_NAME)
-    out_dir = project_root / "outputs" / "finetuned" / Path(MODEL_NAME_OR_PATH).name
+    mlflow.set_experiment(cfg.mlflow_experiment_name)
+    out_dir = Path(Path(cfg.hparams.model_name_or_path).name)
     out_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"MLflow tracking URI: {tracking_uri}")
 
-    dataset, le = load_processed_dataset()
-    train_ds, val_ds, test_ds = split_dataset(dataset)
+    dataset, le = load_processed_dataset(cfg)
+    train_ds, val_ds, test_ds = split_dataset(dataset, cfg)
     # Efficient label extraction for class weights
     train_indices_int = [int(i) for i in train_ds.indices]
     train_labels = np.array(dataset.select(train_indices_int)["labels"])
-    class_weights = compute_class_weights(train_labels)
+    class_weights = compute_class_weights(train_labels, le, cfg)
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME_OR_PATH)
+    tokenizer = AutoTokenizer.from_pretrained(cfg.hparams.model_name_or_path)
     model = AutoModelForSequenceClassification.from_pretrained(
-        MODEL_NAME_OR_PATH, num_labels=len(le.classes_)
+        cfg.hparams.model_name_or_path, num_labels=len(le.classes_)
     )
     model.config.id2label = {i: lab for i, lab in enumerate(le.classes_)}
     model.config.label2id = {lab: i for i, lab in enumerate(le.classes_)}
 
     trainer = setup_trainer(
-        model, tokenizer, train_ds, val_ds, str(out_dir), class_weights=class_weights
+        model,
+        tokenizer,
+        train_ds,
+        val_ds,
+        str(out_dir),
+        cfg,
+        class_weights=class_weights,
     )
 
     with mlflow.start_run():
         mlflow.log_params(
             {
-                "model_name_or_path": MODEL_NAME_OR_PATH,
-                "learning_rate": LEARNING_RATE,
-                "batch_size": BATCH_SIZE,
-                "epochs": NUM_EPOCHS,
-                "weight_decay": WEIGHT_DECAY,
-                "warmup_ratio": WARMUP_RATIO,
-                "seed": SEED,
-                "stratified_split": USE_STRATIFIED_SPLIT,
-                "class_weights": USE_CLASS_WEIGHTS,
+                "model_name_or_path": cfg.hparams.model_name_or_path,
+                "learning_rate": cfg.hparams.learning_rate,
+                "batch_size": cfg.hparams.batch_size,
+                "epochs": cfg.hparams.num_train_epochs,
+                "weight_decay": cfg.hparams.weight_decay,
+                "warmup_ratio": cfg.hparams.warmup_ratio,
+                "seed": cfg.hparams.seed,
+                "stratified_split": cfg.hparams.use_stratified_split,
+                "class_weights": cfg.hparams.use_class_weights,
             }
         )
         logger.info("Training...")

@@ -5,13 +5,15 @@ hparams:
   learning_rate: 2e-5
   weight_decay: 0.01
   warmup_ratio: 0.1
-  num_train_epochs: 3
+  num_train_epochs: 50
   batch_size: 16 # Smaller default for single GPU
-  eval_steps: 100
+  eval_steps: 1000
   save_steps: 100
   patience: 3
   fp16: False
   gradient_accumulation_steps: 1
+  use_stratified_split: True
+  use_class_weights: True
 
 xai:
   enabled: true
