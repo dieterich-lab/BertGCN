@@ -5,4 +5,8 @@ project_name: "BertGCN"
 mlflow_experiment_name: "bertgcn_finetuning"
 testonly: false
 
+# Optional override; if unset we force a central file-based store at project root.
+# Can also be provided via environment variable MLFLOW_TRACKING_URI.
+mlflow_tracking_uri: ${oc.env:MLFLOW_TRACKING_URI, null}
+
 # Add more global config options as needed
