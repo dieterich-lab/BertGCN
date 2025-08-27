@@ -22,10 +22,10 @@ from model import BertGCN
 from params import parse_args
 from torch.optim.lr_scheduler import ExponentialLR, ReduceLROnPlateau
 from transformers import AutoTokenizer
-from utils import *
 
 from bertgcn.clinic_datasets import CleanClinicDataset
 from bertgcn.config import DEFAULT_MODEL_PATH as PRETRAINEDMODEL
+from src.bertgcn.graph_utils import *
 
 args = parse_args()
 
