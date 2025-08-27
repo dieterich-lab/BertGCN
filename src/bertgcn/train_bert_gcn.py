@@ -25,7 +25,7 @@ from transformers import AutoTokenizer
 
 from bertgcn.clinic_datasets import CleanClinicDataset
 from bertgcn.config import DEFAULT_MODEL_PATH as PRETRAINEDMODEL
-from src.bertgcn.graph_utils import *
+from src.bertgcn.utils import *
 
 args = parse_args()
 

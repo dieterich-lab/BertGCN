@@ -22,9 +22,15 @@ import joblib
 import mlflow
 import numpy as np
 import pandas as pd
+import shap
 import toml
 from datasets import Dataset, load_from_disk
 from lime.lime_text import LimeTextExplainer
+
+try:
+    import matplotlib.pyplot as plt  # used for SHAP bar plot
+except Exception:  # matplotlib may not be installed in minimal environments
+    plt = None
 from omegaconf import DictConfig, OmegaConf
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Subset
@@ -93,8 +99,12 @@ def log_environment_info(cfg: DictConfig):
 
 def load_processed_dataset(
     cfg: DictConfig,
-) -> Tuple[Dataset, LabelEncoder, LabelEncoder]:
-    """Loads the preprocessed dataset and label encoders from disk."""
+) -> Tuple[Dataset, Dataset, LabelEncoder, LabelEncoder]:
+    """Loads the preprocessed dataset and label encoders from disk.
+
+    Returns a tuple of (trainer_dataset, raw_dataset_with_text, label_encoder, meds_label_encoder).
+    The trainer dataset has torch format; the raw dataset retains the 'text' column for XAI.
+    """
     data_path = Path(
         cfg.dataset.get("processed_path", Path.cwd() / "data" / "processed")
     )
@@ -111,18 +121,20 @@ def load_processed_dataset(
         sys.exit(1)
 
     logger.info(f"Loading processed dataset from {dataset_path}")
-    dataset = load_from_disk(dataset_path)
+    raw_dataset = load_from_disk(str(dataset_path))
 
     logger.info("Loading label encoders")
     le = joblib.load(le_path)
     meds_le = joblib.load(meds_le_path)
 
-    # Set the format for PyTorch
-    dataset.set_format(
+    trainer_dataset = raw_dataset.remove_columns(
+        [c for c in ["text"] if c in raw_dataset.column_names]
+    )
+    trainer_dataset.set_format(
         type="torch", columns=["input_ids", "attention_mask", "labels", "med_id"]
     )
 
-    return dataset, le, meds_le
+    return trainer_dataset, raw_dataset, le, meds_le
 
 
 def split_dataset(
@@ -177,15 +189,134 @@ def compute_metrics(eval_pred) -> Dict[str, float]:
     }
 
 
-def log_explainability_artifacts(trainer: Trainer, dataset: Subset, output_dir: str):
-    """Generate and log SHAP and LIME explainability reports."""
-    logger.info("Generating explainability reports...")
-    # Note: Explainability tools like SHAP and LIME require the raw text, which is
-    # not part of this streamlined training pipeline. To enable them, the data
-    # loading process would need to be adapted to also provide the original text.
-    logger.warning(
-        "Skipping SHAP and LIME explainability as raw text is not available in this workflow."
-    )
+def log_explainability_artifacts(
+    trainer: Trainer,
+    raw_dataset: Dataset,
+    output_dir: str,
+    le: LabelEncoder,
+    cfg: DictConfig,
+):
+    """Generate and log SHAP and LIME explainability reports if enabled."""
+    if not cfg.xai.enabled:
+        logger.info("XAI disabled; skipping SHAP/LIME generation.")
+        return
+
+    try:
+        import torch  # local import to avoid unnecessary dependency at import time
+
+        logger.info("Generating explainability reports (SHAP & LIME)...")
+
+        model = trainer.model
+        tokenizer = trainer.tokenizer
+        class_names = list(le.classes_)
+        # Ensure model config has id2label/label2id for nicer outputs
+        model.config.id2label = {i: n for i, n in enumerate(class_names)}
+        model.config.label2id = {n: i for i, n in enumerate(class_names)}
+
+        # Collect texts
+        if "text" not in raw_dataset.column_names:
+            logger.warning("Raw dataset has no 'text' column; cannot compute XAI.")
+            return
+        texts = raw_dataset["text"]
+
+        rng = np.random.RandomState(cfg.xai.seed)
+        # Sample indices (avoid exceeding dataset size)
+        total_n = len(texts)
+        shap_bg_n = min(cfg.xai.shap_num_background, total_n)
+        shap_sample_n = min(cfg.xai.shap_num_samples, total_n)
+        lime_sample_n = min(cfg.xai.lime_num_samples, total_n)
+        bg_indices = rng.choice(total_n, size=shap_bg_n, replace=False)
+        shap_indices = rng.choice(total_n, size=shap_sample_n, replace=False)
+        lime_indices = rng.choice(total_n, size=lime_sample_n, replace=False)
+
+        background_texts = [texts[i] for i in bg_indices]
+        shap_texts = [texts[i] for i in shap_indices]
+        lime_texts = [texts[i] for i in lime_indices]
+
+        max_len = cfg.xai.max_tokens_for_xai
+
+        def predict_proba(raw_text_list):
+            enc = tokenizer(
+                raw_text_list,
+                truncation=True,
+                padding=True,
+                max_length=max_len,
+                return_tensors="pt",
+            )
+            enc = {k: v.to(model.device) for k, v in enc.items()}
+            with torch.no_grad():
+                outputs = model(**enc)
+                probs = torch.softmax(outputs.logits, dim=-1)
+            return probs.cpu().numpy()
+
+        xai_dir = Path(output_dir) / "xai"
+        shap_dir = xai_dir / "shap"
+        lime_dir = xai_dir / "lime"
+        shap_dir.mkdir(parents=True, exist_ok=True)
+        lime_dir.mkdir(parents=True, exist_ok=True)
+
+        # SHAP
+        logger.info("Computing SHAP values...")
+        try:
+            masker = shap.maskers.Text(tokenizer)
+            explainer = shap.Explainer(predict_proba, masker, output_names=class_names)
+            shap_values = explainer(shap_texts)
+            # Save summary bar (importance) plot
+            try:
+                bar_path = shap_dir / "shap_bar_summary.png"
+                shap.plots.bar(shap_values, max_display=20, show=False)
+                import matplotlib.pyplot as plt
+
+                plt.tight_layout()
+                plt.savefig(bar_path, dpi=150)
+                plt.close()
+            except Exception as e:
+                logger.warning(f"Could not save SHAP bar plot: {e}")
+            # Save individual text plots (HTML)
+            for i, sv in enumerate(shap_values):
+                try:
+                    html_path = shap_dir / f"shap_text_{i}.html"
+                    shap.plots.text(sv, display=False).save_html(str(html_path))
+                except Exception:
+                    # Fallback: raw strings
+                    with open(shap_dir / f"shap_text_{i}.txt", "w") as f:
+                        f.write(str(sv))
+        except Exception as e:
+            logger.warning(f"SHAP computation failed: {e}")
+
+        # LIME
+        logger.info("Computing LIME explanations...")
+        try:
+            lime_explainer = LimeTextExplainer(class_names=class_names)
+            for i, txt in enumerate(lime_texts):
+                try:
+                    exp = lime_explainer.explain_instance(
+                        txt,
+                        predict_proba,
+                        num_features=20,
+                        labels=[0],  # we will still save full HTML
+                    )
+                    out_path = lime_dir / f"lime_text_{i}.html"
+                    exp.save_to_file(str(out_path))
+                except Exception as inner:
+                    logger.warning(f"LIME explanation failed for sample {i}: {inner}")
+        except Exception as e:
+            logger.warning(f"LIME computation failed: {e}")
+
+        # Simple manifest
+        manifest = {
+            "shap_background_indices": bg_indices.tolist(),
+            "shap_sample_indices": shap_indices.tolist(),
+            "lime_sample_indices": lime_indices.tolist(),
+            "class_names": class_names,
+        }
+        import json
+
+        with open(xai_dir / "manifest.json", "w") as f:
+            json.dump(manifest, f, indent=2)
+        logger.info("Explainability artifacts generated.")
+    except Exception as e:
+        logger.warning(f"Failed to generate explainability artifacts: {e}")
 
 
 def setup_trainer(
@@ -244,13 +375,14 @@ def main(cfg: DictConfig) -> float:
         mlflow.set_tag("doclevel", cfg.dataset.doclevel)
         log_environment_info(cfg)
         mlflow.log_params(OmegaConf.to_container(cfg.hparams, resolve=True))
-
         tokenizer = AutoTokenizer.from_pretrained(cfg.hparams.model_name_or_path)
 
-        # Load the pre-processed dataset
-        dataset, le, _ = load_processed_dataset(cfg)
+        # Load the pre-processed dataset (trainer + raw for XAI)
+        trainer_dataset, raw_dataset, le, _ = load_processed_dataset(cfg)
 
-        train_dataset, val_dataset, test_dataset = split_dataset(dataset, le, cfg)
+        train_dataset, val_dataset, test_dataset = split_dataset(
+            trainer_dataset, le, cfg
+        )
 
         model = AutoModelForSequenceClassification.from_pretrained(
             cfg.hparams.model_name_or_path, num_labels=len(le.classes_)
@@ -271,7 +403,8 @@ def main(cfg: DictConfig) -> float:
         test_results = trainer.evaluate(test_dataset)
         logger.info(f"Test results: {test_results}")
 
-        log_explainability_artifacts(trainer, test_dataset, output_dir)
+        # Generate explainability artifacts
+        log_explainability_artifacts(trainer, raw_dataset, output_dir, le, cfg)
 
         logger.info("Fine-tuning completed.")
 

@@ -12,3 +12,11 @@ hparams:
   patience: 3
   fp16: False
   gradient_accumulation_steps: 1
+
+xai:
+  enabled: true
+  shap_num_background: 20      # number of background texts for SHAP
+  shap_num_samples: 40         # number of samples to explain with SHAP text plots
+  lime_num_samples: 10         # number of samples to explain with LIME
+  max_tokens_for_xai: 512      # truncate to this many tokens for speed
+  seed: 42
