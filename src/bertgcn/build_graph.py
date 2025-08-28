@@ -92,9 +92,11 @@ class GraphBuilder:
         batch_size: int = 1000,
         bidirectional_tfidf: bool = True,
         min_pmi_threshold: float = 0,
+        min_token_freq: int = 1,
+        lowercase: bool = True,
+        hf_tokenizer: Optional[object] = None,
     ):
-        """
-        Initialize the GraphBuilder.
+        """Initialize the GraphBuilder.
 
         Args:
             dataset: The dataset containing documents and labels
@@ -104,7 +106,11 @@ class GraphBuilder:
             batch_size: Number of documents to process at once
             bidirectional_tfidf: Whether to add bidirectional TF-IDF edges
             min_pmi_threshold: Minimum PMI value threshold (default: 0)
+            min_token_freq: Minimum frequency for tokens to be included in vocab
+            lowercase: Whether to lowercase tokens
+            hf_tokenizer: Optional HuggingFace tokenizer to enforce tokenization parity
         """
+        # Basic params
         self.dataset = dataset
         self.embed_dim = embed_dim
         self.dataname = dataname
@@ -113,9 +119,100 @@ class GraphBuilder:
         self.bidirectional_tfidf = bidirectional_tfidf
         self.min_pmi_threshold = min_pmi_threshold
 
+        # Tokenization / vocab options
+        self.min_token_freq = int(min_token_freq)
+        self.lowercase = bool(lowercase)
+        self.hf_tokenizer = hf_tokenizer
+
         # Initialized later
-        self.vocab = []
-        self.vocab_size = 0
+        self.vocab: List[str] = []
+        self.vocab_size: int = 0
+
+    def _tokenize(self, text: str) -> List[str]:
+        """Normalize and tokenize text into tokens used for vocab/windows.
+
+        Current behavior: lowercasing (optional) and splitting on whitespace after
+        stripping common punctuation characters from token edges.
+        """
+        if not isinstance(text, str):
+            return []
+        s = text.strip()
+        if self.lowercase:
+            s = s.lower()
+        # If an HF tokenizer is provided, prefer its tokenization for parity.
+        if self.hf_tokenizer is not None:
+            try:
+                # HF tokenizers return a list of token strings
+                toks = self.hf_tokenizer.tokenize(text)
+                # Post-process tokens: strip special prefix markers (e.g., '##')
+                toks = [t.lstrip("##") for t in toks if t.strip()]
+                return toks
+            except Exception:
+                # Fall back to simple behavior if tokenizer fails
+                logger.debug(
+                    "HF tokenizer provided but failed; falling back to simple tokenization"
+                )
+
+        # Simple punctuation trimming per token (keeps internal punctuation)
+        tokens = []
+        for tok in s.split():
+            tok = tok.strip("()[]{}<>,.:;!?\"'`)\n\t")
+            if tok:
+                tokens.append(tok)
+        return tokens
+
+    def build_vocab(self) -> Tuple[List[str], Dict[str, int]]:
+        """
+        Build a vocabulary from the dataset texts and return (vocab, word2id).
+
+        This creates a simple vocabulary by splitting on whitespace. It also
+        sets self.vocab, self.word2id and self.vocab_size for later use.
+        """
+        with log_step("Building vocabulary from dataset texts"):
+            counter = Counter()
+            for text in self.dataset.texts:
+                # defensively handle non-str values
+                if not isinstance(text, str):
+                    continue
+                tokens = self._tokenize(text)
+                counter.update(tokens)
+
+            # Filter by min frequency and keep deterministic order
+            vocab = sorted([w for w, c in counter.items() if c >= self.min_token_freq])
+            self.vocab = vocab
+            self.word2id = {w: i for i, w in enumerate(self.vocab)}
+            self.vocab_size = len(self.vocab)
+
+            logger.info(f"Built vocabulary of size {self.vocab_size}")
+            return self.vocab, self.word2id
+
+    def create_windows(self) -> List[List[str]]:
+        """
+        Create sliding windows of words from each document.
+
+        Returns:
+            List of word windows
+        """
+        with log_step(f"Creating sliding windows with size {self.window_size}"):
+            windows: List[List[str]] = []
+
+            for doc_words in self.dataset.texts:
+                if not isinstance(doc_words, str):
+                    continue
+                words = self._tokenize(doc_words)
+                length = len(words)
+
+                # Add first window
+                if length > 0:
+                    windows.append(words[: min(self.window_size, length)])
+
+                # Add sliding windows
+                for j in range(1, max(1, length - self.window_size + 1)):
+                    window = words[j : j + self.window_size]
+                    windows.append(window)
+
+            logger.info(f"Created {len(windows)} windows")
+            return windows
 
     def build_word_doc_matrix(self) -> Tuple[Any, Dict[str, int]]:
         """
@@ -140,7 +237,7 @@ class GraphBuilder:
                 end_idx = min((batch_idx + 1) * self.batch_size, num_docs)
                 # Process this batch of documents
                 for doc_idx in range(start_idx, end_idx):
-                    words = set(self.dataset.texts[doc_idx].split())
+                    words = set(self._tokenize(self.dataset.texts[doc_idx]))
                     word_ids = [
                         self.word2id[word] for word in words if word in self.word2id
                     ]
@@ -170,7 +267,7 @@ class GraphBuilder:
             windows = []
 
             for doc_words in self.dataset.texts:
-                words = doc_words.split()
+                words = self._tokenize(doc_words)
                 length = len(words)
 
                 # Add first window
@@ -340,7 +437,7 @@ class GraphBuilder:
                 end_idx = min((batch_idx + 1) * batch_size, len(dataset_indices))
 
                 for doc_id in dataset_indices[start_idx:end_idx]:
-                    words = self.dataset.texts[doc_id].split()
+                    words = self._tokenize(self.dataset.texts[doc_id])
                     word_counts = Counter(
                         word for word in words if word in self.word2id
                     )
@@ -396,7 +493,7 @@ class GraphBuilder:
 
                     for batch_pos, doc_id in enumerate(indices[start_idx:end_idx]):
                         global_pos = start_idx + batch_pos
-                        words = self.dataset.texts[doc_id].split()
+                        words = self._tokenize(self.dataset.texts[doc_id])
                         total_words_in_doc = len(words) if len(words) > 0 else 1
                         unique_words = set(words) & set(self.word2id.keys())
 

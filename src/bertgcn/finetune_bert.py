@@ -414,25 +414,10 @@ def main(cfg: DictConfig):
         except Exception as e:  # pragma: no cover
             logger.warning(f"Confusion matrix logging skipped: {e}")
 
-        trainer.save_model(str(out_dir))
-        tokenizer.save_pretrained(str(out_dir))
-        # Diagnostic: log the files we are about to upload so we can debug
-        # empty-artifact cases. This prints relative paths and sizes.
-        try:
-            logger.info(f"Saved model files to: {out_dir.resolve()}")
-            for p in sorted(out_dir.rglob("**/*")):
-                try:
-                    size = p.stat().st_size
-                except Exception:
-                    size = -1
-                logger.info(f"  {p.relative_to(out_dir)} ({size} bytes)")
-        except Exception as e:  # pragma: no cover - best-effort logging
-            logger.warning(f"Could not list out_dir contents: {e}")
-
         # Prefer MLflow-native model logging when available. Try
         # mlflow.transformers.log_model first (captures tokenizer, model and
-        # flavor metadata). Fallback to mlflow.pytorch.log_model, and if
-        # neither is available fall back to uploading artifacts.
+        # flavor metadata). Fallback to mlflow.pytorch.log_model. If neither
+        # is available, save locally and upload artifacts.
         registered_name = None
         try:
             registered_name = cfg.mlflow_model_name
@@ -458,9 +443,8 @@ def main(cfg: DictConfig):
             try:
                 import mlflow.pytorch as mlp
 
-                # mlflow.pytorch.log_model accepts a PyTorch model; HF models
-                # subclass torch.nn.Module and the tokenizer should be
-                # separately saved as artifacts.
+                # Ensure tokenizer is saved so we can upload tokenizer files
+                tokenizer.save_pretrained(str(out_dir))
                 mlp.log_model(
                     model,
                     artifact_path="model",
@@ -474,11 +458,26 @@ def main(cfg: DictConfig):
                 logged = True
             except Exception:
                 logger.info(
-                    "mlflow transformers/pytorch logging not available; falling back to artifact upload"
+                    "mlflow transformers/pytorch logging not available; falling back to local save + artifact upload"
                 )
 
         if not logged:
-            # Last-resort: upload the directory contents as run artifacts.
+            # Save locally then upload as artifacts (last-resort).
+            trainer.save_model(str(out_dir))
+            tokenizer.save_pretrained(str(out_dir))
+            # Diagnostic: log the files we are about to upload so we can debug
+            # empty-artifact cases. This prints relative paths and sizes.
+            try:
+                logger.info(f"Saved model files to: {out_dir.resolve()}")
+                for p in sorted(out_dir.rglob("**/*")):
+                    try:
+                        size = p.stat().st_size
+                    except Exception:
+                        size = -1
+                    logger.info(f"  {p.relative_to(out_dir)} ({size} bytes)")
+            except Exception as e:  # pragma: no cover - best-effort logging
+                logger.warning(f"Could not list out_dir contents: {e}")
+
             mlflow.log_artifacts(str(out_dir), artifact_path="model")
         logger.info("Done. Launch MLflow UI with: mlflow ui --backend-store-uri mlruns")
 

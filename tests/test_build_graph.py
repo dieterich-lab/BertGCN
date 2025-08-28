@@ -275,11 +275,6 @@ def test_graph_structure_and_dimensions(sample_clinic_dataset):
     wordA_id = graph_builder.word2id.get(GroundTruth.WORD_A)
     wordB_id = graph_builder.word2id.get(GroundTruth.WORD_B)
 
-    # Debug the adjacency matrix structure
-    print(f"Adjacency matrix shape: {adj.shape}")
-    print(f"Word '{GroundTruth.WORD_A}' ID: {wordA_id}")
-    print(f"Word '{GroundTruth.WORD_B}' ID: {wordB_id}")
-
     # Skip tests if words aren't in vocabulary
     if wordA_id is None or wordB_id is None:
         print(f"Words not found in vocabulary, skipping test")
@@ -311,10 +306,7 @@ def test_graph_structure_and_dimensions(sample_clinic_dataset):
             len(wordA_row) > 0
         ), f"Word '{GroundTruth.WORD_A}' should have connections"
 
-        # Print a summary of what we found
-        print(f"Graph summary: {adj.nnz} edges")
-        print(f"Document {doc0_node_id} has {len(doc_row)} connections")
-        print(f"Word '{GroundTruth.WORD_A}' has {len(wordA_row)} connections")
+    # Summary information is available via assertions and logs; avoid noisy prints
 
     # Check symmetry of the adjacency matrix
     assert (adj - adj.T).nnz == 0, "Adjacency matrix should be symmetric for GCN"
