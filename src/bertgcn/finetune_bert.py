@@ -448,17 +448,7 @@ def main(cfg: DictConfig):
             "Ensure you are running with Hydra and 'hydra.run.dir' is set in your config."
         )
 
-    # Sanitize: force hydra run dir under hydra/finetune to avoid stray top-level
-    # directories when users pass arbitrary relative paths.
-    from os import sep as _sep
-
-    hydra_run_dir_str = str(hydra_run_dir)
-    if not hydra_run_dir_str.startswith("hydra/"):
-        # Collapse path components into a single suffix token to keep name uniqueness
-        safe_token = hydra_run_dir_str.replace(_sep, "_").replace("..", "_")
-        hydra_run_dir_str = f"hydra/finetune/{safe_token}"
-    hydra_run_dir = hydra_run_dir_str
-    out_dir = project_root / Path(hydra_run_dir)
+    out_dir = Path(hydra_run_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"MLflow tracking URI: {mlflow.get_tracking_uri()}")
 
@@ -661,19 +651,20 @@ def main(cfg: DictConfig):
         keep_local = getattr(cfg.hparams, "keep_local_copy", False)
 
         # Final model persistence policy: always save a consolidated copy to
-        # models/finetuned/<run_name>. This decouples long-term artifact from
-        # the transient hydra run directory and avoids accidental omission
-        # when autolog is active. (Optional future: gate via config flag.)
-        run_name = Path(hydra_run_dir).name
-        final_dir = project_root / "models" / "finetuned" / run_name
+        # models/finetuned/<timestamp>. This decouples long-term artifact from
+        # the transient hydra run directory.
+        timestamp = Path(hydra_run_dir).name
+        final_dir = project_root / "models" / "finetuned" / timestamp
         final_dir.mkdir(parents=True, exist_ok=True)
         try:
             trainer.save_model(str(final_dir))
-            try:
-                tokenizer.save_pretrained(str(final_dir))
-            except Exception:
-                pass
-            logger.info(f"Saved final model copy to {final_dir}")
+            tokenizer.save_pretrained(str(final_dir))
+            # Save label encoder
+            le_path = final_dir / "label_encoder.joblib"
+            joblib.dump(le, le_path)
+            logger.info(
+                f"Saved final model, tokenizer, and label encoder to {final_dir}"
+            )
         except Exception as e:
             logger.warning(f"Could not save final model copy to {final_dir}: {e}")
 
