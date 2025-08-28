@@ -22,13 +22,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, Tuple
 
-import hydra
 import joblib
 import mlflow
 import numpy as np
 import torch
 from datasets import Dataset, load_from_disk
-from hydra.utils import get_original_cwd
 from omegaconf import DictConfig, OmegaConf
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Subset
@@ -42,6 +40,8 @@ from transformers import (
 )
 from transformers.data.data_collator import DataCollatorWithPadding
 from transformers.training_args import IntervalStrategy, SaveStrategy
+
+import hydra
 
 OmegaConf.register_new_resolver("basename", lambda p: Path(p).name)
 
@@ -226,6 +226,8 @@ def setup_trainer(
     ta_kwargs = {
         "output_dir": out_dir,
         "evaluation_strategy": IntervalStrategy.EPOCH,
+        "save_strategy": SaveStrategy.EPOCH,
+        "logging_dir": out_dir,  # keep HF logs (trainer_state, events) inside hydra run dir
         "learning_rate": cfg.hparams.learning_rate,
         "per_device_train_batch_size": cfg.hparams.batch_size,
         "per_device_eval_batch_size": cfg.hparams.batch_size,
@@ -423,28 +425,48 @@ def main(cfg: DictConfig):
             logger.info("Enabled mlflow.pytorch.autolog()")
         except Exception:
             logger.info("mlflow autolog not available; using manual logging.")
-    # Use the original working directory as project root and the Hydra run
-    # directory to construct an absolute output path. Some callers (tests or
-    # direct script invocation) may pass a plain dict or a DictConfig missing
-    # the `hydra` key; handle both gracefully and fall back to a sensible
-    # default when not present.
-    hydra_run_dir = None
-    try:
-        # OmegaConf DictConfig path (normal hydra invocation)
-        hydra_run_dir = cfg.hydra.run.dir
-    except Exception:
-        # Fallback for plain dict-like configs or missing keys
+
+    # Get hydra run directory from config
+    hydra_run_dir = OmegaConf.select(cfg, "hydra.run.dir")
+    if hydra_run_dir is None:
+        logger.info("hydra.run.dir not found, loading full config manually...")
         try:
-            hydra_obj = cfg.get("hydra", {}) if isinstance(cfg, dict) else {}
-            hydra_run_dir = hydra_obj.get("run", {}).get("dir")
-        except Exception:
-            hydra_run_dir = None
+            # Load the complete config manually
+            config_dir = Path(__file__).parent.parent.parent / "conf"
+            config_files = ["main.yaml", "hparams.yaml", "dataset.yaml", "config.yaml"]
 
-    if not hydra_run_dir:
-        # Default to a repository-local outputs folder so runs don't write to
-        # the current working directory unexpectedly.
-        hydra_run_dir = "outputs/finetune_run"
+            full_config = OmegaConf.create()
+            for config_file in config_files:
+                config_path = config_dir / config_file
+                if config_path.exists():
+                    logger.info(f"Loading config from {config_path}")
+                    file_config = OmegaConf.load(config_path)
+                    full_config = OmegaConf.merge(full_config, file_config)
 
+            # Extract hydra.run.dir from the merged config
+            hydra_run_dir = OmegaConf.select(full_config, "hydra.run.dir")
+            logger.info(f"Loaded hydra.run.dir: {hydra_run_dir}")
+
+            if hydra_run_dir is None:
+                raise ValueError("hydra.run.dir not found in any config file")
+
+        except Exception as e:
+            logger.error(f"Failed to load config manually: {e}")
+            raise ValueError(
+                "hydra.run.dir must be specified in the configuration. "
+                "Please ensure config files exist in conf/ directory."
+            )
+
+    # Sanitize: force hydra run dir under hydra/finetune to avoid stray top-level
+    # directories when users pass arbitrary relative paths.
+    from os import sep as _sep
+
+    hydra_run_dir_str = str(hydra_run_dir)
+    if not hydra_run_dir_str.startswith("hydra/"):
+        # Collapse path components into a single suffix token to keep name uniqueness
+        safe_token = hydra_run_dir_str.replace(_sep, "_").replace("..", "_")
+        hydra_run_dir_str = f"hydra/finetune/{safe_token}"
+    hydra_run_dir = hydra_run_dir_str
     out_dir = project_root / Path(hydra_run_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"MLflow tracking URI: {mlflow.get_tracking_uri()}")
@@ -464,6 +486,16 @@ def main(cfg: DictConfig):
     model.config.label2id = {lab: i for i, lab in enumerate(le.classes_)}
 
     with mlflow.start_run():
+        # Tag run with hydra run directory & script name for traceability
+        try:
+            mlflow.set_tags(
+                {
+                    "hydra_run_dir": str(out_dir),
+                    "entry_script": "finetune_bert",
+                }
+            )
+        except Exception:
+            pass
         # Create the Trainer inside the active MLflow run so autolog captures
         # the training lifecycle and artifacts more reliably.
         trainer = setup_trainer(
@@ -556,14 +588,32 @@ def main(cfg: DictConfig):
         # of classes (avoids sklearn warning about single-label inputs).
         all_label_indices = list(range(len(le.classes_)))
         cm = confusion_matrix(labels, preds, labels=all_label_indices)
-        import json
-
-        cm_path = out_dir / "confusion_matrix.json"
-        with open(cm_path, "w") as f:
-            json.dump(
-                {"matrix": cm.tolist(), "labels": le.classes_.tolist()}, f, indent=2
+        # Create evaluation subfolder (cosmetic / organizational); we do not
+        # persist the confusion matrix JSON locally to avoid redundant files.
+        (out_dir / "evaluation").mkdir(exist_ok=True)
+        try:
+            mlflow.log_dict(
+                {"matrix": cm.tolist(), "labels": le.classes_.tolist()},
+                artifact_file="evaluation/confusion_matrix.json",
             )
-        mlflow.log_artifact(str(cm_path), artifact_path="evaluation")
+            logger.info("Logged confusion matrix via mlflow.log_dict (no local file)")
+        except Exception:
+            # Fallback: if log_dict unavailable, write temp file and log then remove
+            import json
+            import tempfile
+
+            tmp_cm = tempfile.NamedTemporaryFile("w", suffix="_cm.json", delete=False)
+            with tmp_cm as f:
+                json.dump(
+                    {"matrix": cm.tolist(), "labels": le.classes_.tolist()},
+                    f,
+                    indent=2,
+                )
+            mlflow.log_artifact(tmp_cm.name, artifact_path="evaluation")
+            try:
+                Path(tmp_cm.name).unlink()
+            except Exception:
+                pass
 
         # Prefer MLflow-native model logging. Assume mlflow.transformers is available.
         registered_name = (
@@ -619,15 +669,22 @@ def main(cfg: DictConfig):
         # Respect cfg.hparams.keep_local_copy if present
         keep_local = getattr(cfg.hparams, "keep_local_copy", False)
 
-        if not logged and not autolog_enabled:
-            if keep_local:
-                trainer.save_model(str(out_dir))
-                tokenizer.save_pretrained(str(out_dir))
-                logger.info("Saved local model/tokenizer because keep_local_copy=True")
-            else:
-                logger.info(
-                    "Skipping local save/upload (keep_local_copy=False). Relying on MLflow logging instead."
-                )
+        # Final model persistence policy: always save a consolidated copy to
+        # models/finetuned/<run_name>. This decouples long-term artifact from
+        # the transient hydra run directory and avoids accidental omission
+        # when autolog is active. (Optional future: gate via config flag.)
+        run_name = Path(hydra_run_dir).name
+        final_dir = project_root / "models" / "finetuned" / run_name
+        final_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            trainer.save_model(str(final_dir))
+            try:
+                tokenizer.save_pretrained(str(final_dir))
+            except Exception:
+                pass
+            logger.info(f"Saved final model copy to {final_dir}")
+        except Exception as e:
+            logger.warning(f"Could not save final model copy to {final_dir}: {e}")
 
         logger.info("Done. Launch MLflow UI with: mlflow ui --backend-store-uri mlruns")
 

@@ -14,7 +14,7 @@ hydra:
   run:
     # Use an outputs directory for ephemeral run outputs by default. This
     # avoids populating `models/finetuned` unless explicitly requested.
-    dir: outputs/finetune_run/${now:%Y-%m-%d_%H-%M-%S}
+    dir: hydra/finetune/${now:%Y-%m-%d_%H-%M-%S}
   # This block provides the values that will override the defaults
   # set by the Optuna plugin's own configuration.
   sweep:
