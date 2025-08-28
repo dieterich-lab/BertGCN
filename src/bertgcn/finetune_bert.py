@@ -27,6 +27,8 @@ import mlflow
 import numpy as np
 import torch
 from datasets import Dataset, load_from_disk
+from hydra.core.hydra_config import HydraConfig
+from hydra.utils import get_original_cwd
 from omegaconf import DictConfig, OmegaConf
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Subset
@@ -426,36 +428,25 @@ def main(cfg: DictConfig):
         except Exception:
             logger.info("mlflow autolog not available; using manual logging.")
 
-    # Get hydra run directory from config
-    hydra_run_dir = OmegaConf.select(cfg, "hydra.run.dir")
+    # Get hydra run directory.
+    try:
+        # Primary method: get from Hydra's runtime. This is the most reliable way.
+        hydra_cfg = HydraConfig.get()
+        hydra_run_dir = hydra_cfg.runtime.output_dir
+        logger.info(f"Hydra-managed run directory: {hydra_run_dir}")
+    except ValueError:
+        # Fallback for tests or when running without full Hydra context.
+        logger.warning(
+            "Could not get Hydra run directory from runtime. "
+            "Falling back to config. This is normal during testing."
+        )
+        hydra_run_dir = OmegaConf.select(cfg, "hydra.run.dir")
+
     if hydra_run_dir is None:
-        logger.info("hydra.run.dir not found, loading full config manually...")
-        try:
-            # Load the complete config manually
-            config_dir = Path(__file__).parent.parent.parent / "conf"
-            config_files = ["main.yaml", "hparams.yaml", "dataset.yaml", "config.yaml"]
-
-            full_config = OmegaConf.create()
-            for config_file in config_files:
-                config_path = config_dir / config_file
-                if config_path.exists():
-                    logger.info(f"Loading config from {config_path}")
-                    file_config = OmegaConf.load(config_path)
-                    full_config = OmegaConf.merge(full_config, file_config)
-
-            # Extract hydra.run.dir from the merged config
-            hydra_run_dir = OmegaConf.select(full_config, "hydra.run.dir")
-            logger.info(f"Loaded hydra.run.dir: {hydra_run_dir}")
-
-            if hydra_run_dir is None:
-                raise ValueError("hydra.run.dir not found in any config file")
-
-        except Exception as e:
-            logger.error(f"Failed to load config manually: {e}")
-            raise ValueError(
-                "hydra.run.dir must be specified in the configuration. "
-                "Please ensure config files exist in conf/ directory."
-            )
+        raise ValueError(
+            "hydra.run.dir could not be determined. "
+            "Ensure you are running with Hydra and 'hydra.run.dir' is set in your config."
+        )
 
     # Sanitize: force hydra run dir under hydra/finetune to avoid stray top-level
     # directories when users pass arbitrary relative paths.
