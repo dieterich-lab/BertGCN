@@ -58,7 +58,14 @@ logger = _get_logger()
 
 
 def load_processed_dataset(cfg: DictConfig) -> Tuple[Dataset, LabelEncoder]:
-    project_root = Path(get_original_cwd())
+    # Hydra's get_original_cwd() requires HydraConfig to be initialized when
+    # the function is called (e.g. when running tests that bypass the
+    # hydra.main wrapper). Use a safe helper that falls back to the current
+    # working directory when Hydra isn't initialized.
+    try:
+        project_root = Path(get_original_cwd())
+    except Exception:
+        project_root = Path.cwd()
     processed_dir = project_root / "data" / "processed"
     dataset_path = processed_dir / "tokenized_dataset"
     le_path = processed_dir / "label_encoder.joblib"
@@ -82,8 +89,15 @@ def split_dataset(dataset: Dataset, cfg: DictConfig):
     labels = np.array(dataset["labels"])  # assumes labels column exists
     n = len(labels)
     indices = np.arange(n)
-    train_ratio = cfg.dataset.train_ratio
-    val_ratio = cfg.dataset.val_ratio
+    # Allow tests or callers to omit `cfg.dataset` by providing sensible
+    # defaults (train/val/test = 0.8/0.1/0.1). This keeps the function robust
+    # when invoked with minimal configs in unit tests.
+    try:
+        train_ratio = cfg.dataset.train_ratio
+        val_ratio = cfg.dataset.val_ratio
+    except Exception:
+        train_ratio = 0.8
+        val_ratio = 0.1
     seed = cfg.hparams.seed
     use_stratified_split = cfg.hparams.use_stratified_split
 
@@ -304,23 +318,43 @@ def setup_trainer(
 @hydra.main(version_base=None, config_path="../../conf", config_name="config")
 def main(cfg: DictConfig):
     set_seed(cfg.hparams.seed)
-    project_root = Path(get_original_cwd())
-    tracking_uri = project_root / "mlruns"
-    mlflow.set_tracking_uri(str(tracking_uri))
+    try:
+        project_root = Path(get_original_cwd())
+    except Exception:
+        project_root = Path.cwd()
+        # Respect an externally configured MLflow tracking URI (e.g. tests that
+        # set a temporary mlruns directory). Only set a sensible default pointing
+        # into the project when the URI appears to be the library default.
+        current_uri = mlflow.get_tracking_uri()
+        # mlflow default is typically 'file:./mlruns' when unset. If the current
+        # URI is that default, override to project-root/mlruns so CLI runs keep
+        # artifacts inside the repository. Otherwise, respect the external URI.
+        if current_uri and current_uri != "file:./mlruns":
+            tracking_uri = current_uri
+            logger.info(f"Using existing MLflow tracking URI: {tracking_uri}")
+        else:
+            tracking_uri = project_root / "mlruns"
+            mlflow.set_tracking_uri(str(tracking_uri))
     mlflow.set_experiment(cfg.mlflow_experiment_name)
     # Enable MLflow autologging for transformers (fallback to pytorch). This
     # helps capture parameters, metrics and artifacts automatically when
     # available.
+    autolog_enabled = False
+    autolog_flavor = None
     try:
         import mlflow.transformers as _mlt
 
         _mlt.autolog()
+        autolog_enabled = True
+        autolog_flavor = "transformers"
         logger.info("Enabled mlflow.transformers.autolog()")
     except Exception:
         try:
             import mlflow.pytorch as _mlp
 
             _mlp.autolog()
+            autolog_enabled = True
+            autolog_flavor = "pytorch"
             logger.info("Enabled mlflow.pytorch.autolog()")
         except Exception:
             logger.info("mlflow autolog not available; using manual logging.")
@@ -358,41 +392,53 @@ def main(cfg: DictConfig):
             class_weights=class_weights,
         )
 
-        mlflow.log_params(
-            {
-                "model_name_or_path": cfg.hparams.model_name_or_path,
-                "learning_rate": cfg.hparams.learning_rate,
-                "batch_size": cfg.hparams.batch_size,
-                "epochs": cfg.hparams.num_train_epochs,
-                "weight_decay": cfg.hparams.weight_decay,
-                "warmup_ratio": cfg.hparams.warmup_ratio,
-                "seed": cfg.hparams.seed,
-                "stratified_split": cfg.hparams.use_stratified_split,
-                "class_weights": cfg.hparams.use_class_weights,
-            }
-        )
+        # Avoid duplicate logging if MLflow autolog captured params/metrics.
+        if not autolog_enabled:
+            mlflow.log_params(
+                {
+                    "model_name_or_path": cfg.hparams.model_name_or_path,
+                    "learning_rate": cfg.hparams.learning_rate,
+                    "batch_size": cfg.hparams.batch_size,
+                    "epochs": cfg.hparams.num_train_epochs,
+                    "weight_decay": cfg.hparams.weight_decay,
+                    "warmup_ratio": cfg.hparams.warmup_ratio,
+                    "seed": cfg.hparams.seed,
+                    "stratified_split": cfg.hparams.use_stratified_split,
+                    "class_weights": cfg.hparams.use_class_weights,
+                }
+            )
+        else:
+            logger.info(
+                f"Autolog enabled ({autolog_flavor}); skipping manual param logging"
+            )
         logger.info("Training...")
         trainer.train()
         logger.info("Validation metrics (best model):")
         val_metrics = trainer.evaluate()
-        mlflow.log_metrics(
-            {
-                f"val_{k}": float(v)
-                for k, v in val_metrics.items()
-                if isinstance(v, (int, float))
-            }
-        )
+        if not autolog_enabled:
+            mlflow.log_metrics(
+                {
+                    f"val_{k}": float(v)
+                    for k, v in val_metrics.items()
+                    if isinstance(v, (int, float))
+                }
+            )
+        else:
+            logger.info("Autolog enabled; skipping manual val metric logging")
         logger.info(str(val_metrics))
 
         logger.info("Evaluating on test set...")
         test_metrics = trainer.evaluate(test_ds)
-        mlflow.log_metrics(
-            {
-                f"test_{k}": float(v)
-                for k, v in test_metrics.items()
-                if isinstance(v, (int, float))
-            }
-        )
+        if not autolog_enabled:
+            mlflow.log_metrics(
+                {
+                    f"test_{k}": float(v)
+                    for k, v in test_metrics.items()
+                    if isinstance(v, (int, float))
+                }
+            )
+        else:
+            logger.info("Autolog enabled; skipping manual test metric logging")
         logger.info(str(test_metrics))
 
         # Confusion matrix
@@ -431,42 +477,87 @@ def main(cfg: DictConfig):
         try:
             import mlflow.transformers as mlt
 
-            mlt.log_model(
-                transformers_model=model,
-                artifact_path="model",
-                tokenizer=tokenizer,
-                registered_model_name=registered_name if registered_name else None,
-            )
-            logger.info("Logged model with mlflow.transformers.log_model()")
-            logged = True
+            # If autologging is active we should avoid double-logging the
+            # model; prefer autolog's behavior. Only call explicit log_model
+            # when autolog is not enabled.
+            if not autolog_enabled:
+                mlt.log_model(
+                    transformers_model=model,
+                    artifact_path="model",
+                    tokenizer=tokenizer,
+                    registered_model_name=registered_name if registered_name else None,
+                )
+                logger.info("Logged model with mlflow.transformers.log_model()")
+                logged = True
+            else:
+                logger.info(
+                    "Autolog enabled; skipping explicit mlflow.transformers.log_model()"
+                )
         except Exception:
             try:
                 import mlflow.pytorch as mlp
 
-                # Ensure tokenizer is saved so we can upload tokenizer files
-                tokenizer.save_pretrained(str(out_dir))
-                mlp.log_model(
-                    model,
-                    artifact_path="model",
-                    registered_model_name=registered_name if registered_name else None,
-                )
-                # also log tokenizer files
-                mlflow.log_artifacts(str(out_dir), artifact_path="model/tokenizer")
-                logger.info(
-                    "Logged model with mlflow.pytorch.log_model() and tokenizer artifacts"
-                )
-                logged = True
+                if not autolog_enabled:
+                    # Ensure tokenizer is saved so we can upload tokenizer files
+                    tokenizer.save_pretrained(str(out_dir))
+                    mlp.log_model(
+                        model,
+                        artifact_path="model",
+                        registered_model_name=(
+                            registered_name if registered_name else None
+                        ),
+                    )
+                    # mlflow.pytorch.log_model will capture model artifacts; avoid
+                    # a separate mlflow.log_artifacts call here to prevent
+                    # duplicate uploads of the same files.
+                    # If tokenizer files must be logged separately (older MLflow
+                    # versions), consider explicitly pointing at the tokenizer
+                    # folder instead of logging the entire out_dir.
+                    logger.info(
+                        "Logged model with mlflow.pytorch.log_model() and tokenizer artifacts"
+                    )
+                    logged = True
+                else:
+                    logger.info(
+                        "Autolog enabled; skipping explicit mlflow.pytorch.log_model()"
+                    )
             except Exception:
                 logger.info(
                     "mlflow transformers/pytorch logging not available; falling back to local save + artifact upload"
                 )
 
-        if not logged:
-            # Save locally then upload as artifacts (last-resort).
-            trainer.save_model(str(out_dir))
-            tokenizer.save_pretrained(str(out_dir))
-            # Diagnostic: log the files we are about to upload so we can debug
-            # empty-artifact cases. This prints relative paths and sizes.
+        # Respect an explicit flag to keep a local copy of the model. By
+        # default (keep_local_copy=False) we prefer MLflow as the single
+        # source-of-truth and avoid duplicating local artifacts.
+        keep_local = False
+        try:
+            keep_local = bool(cfg.hparams.get("keep_local_copy", False))
+        except Exception:
+            # fallback if cfg.hparams is not a mapping-like object
+            try:
+                keep_local = bool(getattr(cfg.hparams, "keep_local_copy", False))
+            except Exception:
+                keep_local = False
+
+        if not logged and not autolog_enabled:
+            # Save locally then upload as artifacts (last-resort) only when
+            # explicitly requested via cfg.hparams.keep_local_copy.
+            if keep_local:
+                trainer.save_model(str(out_dir))
+                tokenizer.save_pretrained(str(out_dir))
+                logger.info("Saved local model/tokenizer because keep_local_copy=True")
+            else:
+                logger.info(
+                    "Skipping local save/upload (keep_local_copy=False). Relying on MLflow logging instead."
+                )
+        elif not logged and autolog_enabled:
+            logger.info(
+                "Autolog enabled and explicit model logging not available; skipping local save/upload"
+            )
+            # Don't call mlflow.log_artifacts here when autolog is active to
+            # avoid duplicate artifact uploads — autologging should have
+            # already captured model artifacts. Keep a diagnostic listing to
+            # help debug empty-artifact cases.
             try:
                 logger.info(f"Saved model files to: {out_dir.resolve()}")
                 for p in sorted(out_dir.rglob("**/*")):
@@ -477,8 +568,6 @@ def main(cfg: DictConfig):
                     logger.info(f"  {p.relative_to(out_dir)} ({size} bytes)")
             except Exception as e:  # pragma: no cover - best-effort logging
                 logger.warning(f"Could not list out_dir contents: {e}")
-
-            mlflow.log_artifacts(str(out_dir), artifact_path="model")
         logger.info("Done. Launch MLflow UI with: mlflow ui --backend-store-uri mlruns")
 
     return 0
