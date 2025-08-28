@@ -12,7 +12,9 @@ defaults:
 
 hydra:
   run:
-    dir: models/finetuned/${basename:${hparams.model_name_or_path}}/${now:%Y-%m-%d_%H-%M-%S}
+    # Use an outputs directory for ephemeral run outputs by default. This
+    # avoids populating `models/finetuned` unless explicitly requested.
+    dir: outputs/finetune_run/${now:%Y-%m-%d_%H-%M-%S}
   # This block provides the values that will override the defaults
   # set by the Optuna plugin's own configuration.
   sweep:
@@ -31,3 +33,8 @@ hydra:
     params:
       hparams.learning_rate: loguniform(1e-6, 1e-4)
       hparams.batch_size: categorical(8, 16, 32)
+
+# Default convenience values for hyperparameters. Keep local copy off by default
+# to avoid redundant local artifacts; set hparams.keep_local_copy=true to keep a copy.
+hparams:
+  keep_local_copy: false

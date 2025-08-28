@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import inspect
 import sys
+import warnings
 from collections import Counter
 from pathlib import Path
 from typing import Dict, Tuple
@@ -40,7 +41,7 @@ from transformers import (
     set_seed,
 )
 from transformers.data.data_collator import DataCollatorWithPadding
-from transformers.training_args import IntervalStrategy
+from transformers.training_args import IntervalStrategy, SaveStrategy
 
 OmegaConf.register_new_resolver("basename", lambda p: Path(p).name)
 
@@ -153,48 +154,22 @@ def split_dataset(dataset: Dataset, cfg: DictConfig):
 
 
 def compute_class_weights(labels: np.ndarray, le: LabelEncoder, cfg: DictConfig):
+    # Minimal: compute balanced class weights when requested, otherwise None.
     if not cfg.hparams.use_class_weights:
         return None
-    try:
-        from sklearn.utils.class_weight import compute_class_weight
-
-        # Use all classes from the label encoder to determine the shape of the weights tensor
-        all_classes = np.arange(len(le.classes_))
-
-        # Calculate weights only for classes present in the provided labels
-        present_classes = np.unique(labels)
-        weights = compute_class_weight(
-            class_weight="balanced", classes=present_classes, y=labels
-        )
-
-        # Create a full weights tensor and populate it
-        full_weights = np.ones(
-            len(all_classes), dtype=np.float32
-        )  # Default to 1 for missing classes
-
-        # Map weights to their corresponding class indices
-        for cls_idx, weight in zip(present_classes, weights):
-            full_weights[cls_idx] = weight
-
-        tensor = torch.tensor(full_weights, dtype=torch.float32)
-        # Clip extreme weights to stabilize training if there's a very rare class
-        if tensor.numel() > 0:
-            # Only consider weights of present classes for median calculation
-            present_weights = tensor[present_classes.astype(int)]
-            if present_weights.numel() > 0:
-                median = present_weights.median()
-                if median > 0:
-                    max_allowed = median * 10.0  # allow up to 10x the median
-                    if (tensor > max_allowed).any():
-                        tensor = torch.clamp(tensor, max=max_allowed)
-                        logger.info(
-                            f"Clipped class weights to max {max_allowed.item():.4f} to avoid instability"
-                        )
-        logger.info(f"Class weights (possibly clipped): {tensor.tolist()}")
-        return tensor
-    except Exception as e:
-        logger.warning(f"Class weights failed: {e}")
+    if labels is None or len(labels) == 0:
+        logger.warning("No labels found for class weight computation; skipping.")
         return None
+    from sklearn.utils.class_weight import compute_class_weight
+
+    present_classes = np.unique(labels)
+    weights = compute_class_weight(
+        class_weight="balanced", classes=present_classes, y=labels
+    )
+    full = np.ones(len(le.classes_), dtype=np.float32)
+    for cls, w in zip(present_classes, weights):
+        full[int(cls)] = float(w)
+    return torch.tensor(full, dtype=torch.float32)
 
 
 def compute_metrics(eval_pred) -> Dict[str, float]:
@@ -218,36 +193,21 @@ class WeightedTrainer(Trainer):
     def compute_loss(
         self, model, inputs, return_outputs=False, **kwargs
     ):  # type: ignore[override]
-        """Override to apply optional class weights.
-
-        Accepts **kwargs to maintain compatibility with newer Trainer versions
-        that may pass additional arguments (e.g., num_items_in_batch).
-        """
+        # Minimal loss override: compute logits and apply CrossEntropyLoss with
+        # optional class weights.
         labels = inputs.get("labels")
-        # Ensure labels are on the same device as logits and have integer dtype
+        device = next(model.parameters()).device
         if labels is not None:
-            device = (
-                next(model.parameters()).device
-                if any(True for _ in model.parameters())
-                else torch.device("cpu")
-            )
             labels = labels.to(device).long()
         outputs = model(
             input_ids=inputs.get("input_ids"),
             attention_mask=inputs.get("attention_mask"),
-            labels=None,
         )
         logits = outputs.logits
         if self.class_weights is not None:
-            class_w = self.class_weights.to(logits.device)
-            # Safety clamp (should already be clipped earlier, but double safety)
-            median = class_w.median()
-            if median > 0:
-                class_w = torch.clamp(class_w, max=median * 10.0)
-            loss_fct = torch.nn.CrossEntropyLoss(weight=class_w)
+            loss_fct = torch.nn.CrossEntropyLoss(weight=self.class_weights.to(device))
         else:
             loss_fct = torch.nn.CrossEntropyLoss()
-
         loss = loss_fct(logits, labels)
         return (loss, outputs) if return_outputs else loss
 
@@ -261,33 +221,100 @@ def setup_trainer(
     cfg: DictConfig,
     class_weights=None,
 ):
-    # Build TrainingArguments with backward compatibility for older Transformers versions
-    base_kwargs = dict(
-        output_dir=out_dir,
-        save_strategy=IntervalStrategy.EPOCH,
-        learning_rate=cfg.hparams.learning_rate,
-        per_device_train_batch_size=cfg.hparams.batch_size,
-        per_device_eval_batch_size=cfg.hparams.batch_size,
-        num_train_epochs=cfg.hparams.num_train_epochs,
-        weight_decay=cfg.hparams.weight_decay,
-        warmup_ratio=cfg.hparams.warmup_ratio,
-        load_best_model_at_end=True,
-        metric_for_best_model="f1",
-        greater_is_better=True,
-        logging_steps=cfg.hparams.eval_steps,  # assuming eval_steps is used for logging
-        save_total_limit=2,
-        report_to=["mlflow"],
-    )
-    sig = inspect.signature(TrainingArguments.__init__)
-    if "evaluation_strategy" in sig.parameters:
-        base_kwargs["evaluation_strategy"] = IntervalStrategy.EPOCH
-    elif "eval_strategy" in sig.parameters:  # legacy name
-        base_kwargs["eval_strategy"] = IntervalStrategy.EPOCH
-    else:
-        logger.warning(
-            "No evaluation/eval_strategy parameter detected; evaluations will rely on default settings."
-        )
-    args = TrainingArguments(**base_kwargs)
+    # Build TrainingArguments from a dict and filter to supported params so
+    # older/newer transformers versions won't raise on unknown kwargs.
+    ta_kwargs = {
+        "output_dir": out_dir,
+        "evaluation_strategy": IntervalStrategy.EPOCH,
+        "learning_rate": cfg.hparams.learning_rate,
+        "per_device_train_batch_size": cfg.hparams.batch_size,
+        "per_device_eval_batch_size": cfg.hparams.batch_size,
+        "num_train_epochs": cfg.hparams.num_train_epochs,
+        "weight_decay": cfg.hparams.weight_decay,
+        "logging_steps": cfg.hparams.eval_steps,
+        "save_total_limit": 2,
+        "report_to": ["mlflow"],
+        "load_best_model_at_end": True,
+        "metric_for_best_model": "f1",
+    }
+    # Filter to parameters actually accepted by TrainingArguments.__init__
+    try:
+        sig = inspect.signature(TrainingArguments.__init__)
+        accepted = set(sig.parameters.keys()) - {"self"}
+        filtered = {k: v for k, v in ta_kwargs.items() if k in accepted}
+    except Exception:
+        # If inspection fails for any reason, fall back to passing the full
+        # kwargs (best-effort) — transformers will raise if unsupported.
+        filtered = ta_kwargs
+
+    # Compatibility guard BEFORE constructing TrainingArguments: if the user
+    # requested `load_best_model_at_end` but evaluation/save strategies would
+    # not both be passed to TrainingArguments (because they were filtered out
+    # for compatibility with the installed transformers), disable
+    # `load_best_model_at_end` to avoid a hard ValueError in
+    # TrainingArguments.__post_init__.
+    try:
+        if filtered.get("load_best_model_at_end", False):
+            has_eval = "evaluation_strategy" in filtered
+            has_save = "save_strategy" in filtered
+            if not (has_eval and has_save):
+                logger.warning(
+                    "Requested load_best_model_at_end but evaluation/save strategy not both present; disabling load_best_model_at_end for compatibility."
+                )
+                filtered.pop("load_best_model_at_end", None)
+            else:
+                # If both are present but mismatched, align them to EPOCH to
+                # satisfy transformers' validation.
+                try:
+                    eval_val = filtered.get("evaluation_strategy")
+                    save_val = filtered.get("save_strategy")
+                    eval_name = getattr(eval_val, "name", str(eval_val))
+                    save_name = getattr(save_val, "name", str(save_val))
+                    if eval_name != save_name:
+                        logger.info(
+                            "Aligning evaluation_strategy and save_strategy to EPOCH for load_best_model_at_end compatibility."
+                        )
+                        filtered["evaluation_strategy"] = IntervalStrategy.EPOCH
+                        filtered["save_strategy"] = SaveStrategy.EPOCH
+                except Exception:
+                    # If anything goes wrong aligning, remove the flag.
+                    filtered.pop("load_best_model_at_end", None)
+    except Exception:
+        # Non-fatal: if introspection fails, proceed and let TrainingArguments
+        # validate as before.
+        pass
+
+    args = TrainingArguments(**filtered)
+
+    # Compatibility guard: some transformers versions require that
+    # `save_strategy` and `evaluation_strategy` match when
+    # `load_best_model_at_end=True`. If the user requested loading the
+    # best model but the strategies are missing or mismatched (for
+    # example because certain kwargs were filtered out), align them to
+    # EPOCH to avoid a hard ValueError at runtime.
+    try:
+        load_best = getattr(args, "load_best_model_at_end", False)
+        if load_best:
+            eval_strat = getattr(args, "evaluation_strategy", None)
+            save_strat = getattr(args, "save_strategy", None)
+            # Normalize to enum names/values where possible
+            eval_name = getattr(eval_strat, "name", str(eval_strat))
+            save_name = getattr(save_strat, "name", str(save_strat))
+            if eval_name in ("NO", "NONE", "None", None) or (eval_name != save_name):
+                logger.info(
+                    "Adjusting TrainingArguments: setting evaluation_strategy and save_strategy to EPOCH for compatibility with load_best_model_at_end=True"
+                )
+                try:
+                    args.evaluation_strategy = IntervalStrategy.EPOCH
+                except Exception:
+                    setattr(args, "evaluation_strategy", IntervalStrategy.EPOCH)
+                try:
+                    args.save_strategy = SaveStrategy.EPOCH
+                except Exception:
+                    setattr(args, "save_strategy", SaveStrategy.EPOCH)
+    except Exception:
+        # Best-effort; don't fail if introspection fails.
+        pass
     trainer_cls = WeightedTrainer if class_weights is not None else Trainer
     data_collator = DataCollatorWithPadding(tokenizer=tokenizer)
 
@@ -306,6 +333,44 @@ def setup_trainer(
     # Attach early stopping callback if configured
     patience = getattr(cfg.hparams, "early_stopping_patience", None)
     if patience is not None and int(patience) > 0:
+        # Ensure TrainingArguments has a valid evaluation strategy; the
+        # EarlyStoppingCallback asserts that args.eval_strategy != NO. Some
+        # transformers versions may have filtered out the original
+        # `evaluation_strategy` kwarg, so set it explicitly here.
+        try:
+            current_eval = getattr(args, "evaluation_strategy", None)
+            if (
+                current_eval is None
+                or getattr(current_eval, "name", str(current_eval)) == "NO"
+            ):
+                logger.info(
+                    "Setting TrainingArguments.evaluation_strategy=EPOCH for EarlyStoppingCallback compatibility"
+                )
+                try:
+                    args.evaluation_strategy = IntervalStrategy.EPOCH
+                except Exception:
+                    setattr(args, "evaluation_strategy", IntervalStrategy.EPOCH)
+                # also set alias used by some TF versions
+                try:
+                    args.eval_strategy = IntervalStrategy.EPOCH
+                except Exception:
+                    setattr(args, "eval_strategy", IntervalStrategy.EPOCH)
+            # Ensure save strategy also aligns when load_best_model_at_end may be used
+            try:
+                current_save = getattr(args, "save_strategy", None)
+                if current_save is None:
+                    try:
+                        args.save_strategy = SaveStrategy.EPOCH
+                    except Exception:
+                        setattr(args, "save_strategy", SaveStrategy.EPOCH)
+            except Exception:
+                pass
+        except Exception:
+            # Don't fail setup if introspection or assignments fail
+            logger.warning(
+                "Could not enforce evaluation/save strategy compatibility for EarlyStoppingCallback"
+            )
+
         trainer_args.setdefault("callbacks", [])
         trainer_args["callbacks"].append(
             EarlyStoppingCallback(early_stopping_patience=int(patience))
@@ -359,11 +424,30 @@ def main(cfg: DictConfig):
         except Exception:
             logger.info("mlflow autolog not available; using manual logging.")
     # Use the original working directory as project root and the Hydra run
-    # directory to construct an absolute output path. This avoids relying on
-    # nested `cfg.config` attributes which may not exist.
-    out_dir = project_root / Path(cfg.hydra.run.dir)
+    # directory to construct an absolute output path. Some callers (tests or
+    # direct script invocation) may pass a plain dict or a DictConfig missing
+    # the `hydra` key; handle both gracefully and fall back to a sensible
+    # default when not present.
+    hydra_run_dir = None
+    try:
+        # OmegaConf DictConfig path (normal hydra invocation)
+        hydra_run_dir = cfg.hydra.run.dir
+    except Exception:
+        # Fallback for plain dict-like configs or missing keys
+        try:
+            hydra_obj = cfg.get("hydra", {}) if isinstance(cfg, dict) else {}
+            hydra_run_dir = hydra_obj.get("run", {}).get("dir")
+        except Exception:
+            hydra_run_dir = None
+
+    if not hydra_run_dir:
+        # Default to a repository-local outputs folder so runs don't write to
+        # the current working directory unexpectedly.
+        hydra_run_dir = "outputs/finetune_run"
+
+    out_dir = project_root / Path(hydra_run_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"MLflow tracking URI: {tracking_uri}")
+    logger.info(f"MLflow tracking URI: {mlflow.get_tracking_uri()}")
 
     dataset, le = load_processed_dataset(cfg)
     train_ds, val_ds, test_ds = split_dataset(dataset, cfg)
@@ -442,106 +526,100 @@ def main(cfg: DictConfig):
         logger.info(str(test_metrics))
 
         # Confusion matrix
-        try:
-            from sklearn.metrics import confusion_matrix
+        from sklearn.metrics import confusion_matrix
 
-            test_output = trainer.predict(test_ds)
-            preds = np.argmax(test_output.predictions, axis=1)
-            labels = test_output.label_ids
-            cm = confusion_matrix(labels, preds)
-            import json
+        # Trainer.predict in tests may receive a torch.utils.data.Subset which
+        # doesn't expose HF Dataset attributes like `column_names`. Convert
+        # back to a datasets.Dataset when possible so monkeypatched trainers
+        # that inspect `column_names` or indexing work correctly.
+        if isinstance(test_ds, Subset) and hasattr(dataset, "select"):
+            predict_indices = [int(i) for i in test_ds.indices]
+            predict_ds = dataset.select(predict_indices)
+        else:
+            predict_ds = test_ds
 
-            cm_path = out_dir / "confusion_matrix.json"
-            with open(cm_path, "w") as f:
-                json.dump(
-                    {"matrix": cm.tolist(), "labels": le.classes_.tolist()}, f, indent=2
-                )
-            mlflow.log_artifact(str(cm_path), artifact_path="evaluation")
-        except Exception as e:  # pragma: no cover
-            logger.warning(f"Confusion matrix logging skipped: {e}")
+        test_output = trainer.predict(predict_ds)
+        # Be defensive: some dummy trainers or unexpected trainer impls may
+        # return objects without `predictions` or `label_ids` attributes.
+        preds = getattr(test_output, "predictions", None)
+        label_ids = getattr(test_output, "label_ids", None)
+        if preds is None:
+            logger.warning("Trainer.predict returned no predictions; using zeros.")
+            preds = np.zeros((len(predict_ds), 1))
+        if label_ids is None:
+            logger.warning("Trainer.predict returned no label_ids; using zeros.")
+            label_ids = np.zeros(len(predict_ds), dtype=int)
+        preds = np.argmax(preds, axis=1)
+        labels = label_ids
+        # Provide the full set of label indices so the confusion matrix has a
+        # consistent shape even when a particular split contains only a subset
+        # of classes (avoids sklearn warning about single-label inputs).
+        all_label_indices = list(range(len(le.classes_)))
+        cm = confusion_matrix(labels, preds, labels=all_label_indices)
+        import json
 
-        # Prefer MLflow-native model logging when available. Try
-        # mlflow.transformers.log_model first (captures tokenizer, model and
-        # flavor metadata). Fallback to mlflow.pytorch.log_model. If neither
-        # is available, save locally and upload artifacts.
-        registered_name = None
-        try:
-            registered_name = cfg.mlflow_model_name
-        except Exception:
-            try:
-                registered_name = cfg.hparams.get("mlflow_model_name", None)
-            except Exception:
-                registered_name = None
+        cm_path = out_dir / "confusion_matrix.json"
+        with open(cm_path, "w") as f:
+            json.dump(
+                {"matrix": cm.tolist(), "labels": le.classes_.tolist()}, f, indent=2
+            )
+        mlflow.log_artifact(str(cm_path), artifact_path="evaluation")
+
+        # Prefer MLflow-native model logging. Assume mlflow.transformers is available.
+        registered_name = (
+            cfg.mlflow_model_name
+            if hasattr(cfg, "mlflow_model_name")
+            else (
+                cfg.hparams.mlflow_model_name
+                if hasattr(cfg.hparams, "mlflow_model_name")
+                else None
+            )
+        )
 
         logged = False
-        try:
-            import mlflow.transformers as mlt
+        # Prefer mlflow.transformers but fall back to mlflow.pytorch or a
+        # local save if necessary. Wrap in try/except so environments with
+        # partial MLflow support don't crash the run.
+        if not autolog_enabled:
+            try:
+                import mlflow.transformers as mlt
 
-            # If autologging is active we should avoid double-logging the
-            # model; prefer autolog's behavior. Only call explicit log_model
-            # when autolog is not enabled.
-            if not autolog_enabled:
                 mlt.log_model(
                     transformers_model=model,
                     artifact_path="model",
                     tokenizer=tokenizer,
-                    registered_model_name=registered_name if registered_name else None,
+                    registered_model_name=registered_name,
                 )
                 logger.info("Logged model with mlflow.transformers.log_model()")
                 logged = True
-            else:
-                logger.info(
-                    "Autolog enabled; skipping explicit mlflow.transformers.log_model()"
-                )
-        except Exception:
-            try:
-                import mlflow.pytorch as mlp
+            except Exception as e1:
+                logger.warning(f"mlflow.transformers.log_model failed: {e1}")
+                try:
+                    import mlflow.pytorch as mltp
 
-                if not autolog_enabled:
-                    # Ensure tokenizer is saved so we can upload tokenizer files
-                    tokenizer.save_pretrained(str(out_dir))
-                    mlp.log_model(
-                        model,
-                        artifact_path="model",
-                        registered_model_name=(
-                            registered_name if registered_name else None
-                        ),
-                    )
-                    # mlflow.pytorch.log_model will capture model artifacts; avoid
-                    # a separate mlflow.log_artifacts call here to prevent
-                    # duplicate uploads of the same files.
-                    # If tokenizer files must be logged separately (older MLflow
-                    # versions), consider explicitly pointing at the tokenizer
-                    # folder instead of logging the entire out_dir.
-                    logger.info(
-                        "Logged model with mlflow.pytorch.log_model() and tokenizer artifacts"
-                    )
+                    mltp.log_model(pytorch_model=model, artifact_path="model")
+                    logger.info("Logged model with mlflow.pytorch.log_model()")
                     logged = True
-                else:
-                    logger.info(
-                        "Autolog enabled; skipping explicit mlflow.pytorch.log_model()"
-                    )
-            except Exception:
-                logger.info(
-                    "mlflow transformers/pytorch logging not available; falling back to local save + artifact upload"
-                )
+                except Exception as e2:
+                    logger.warning(f"mlflow.pytorch.log_model failed: {e2}")
+                    # As a final fallback, save locally (if allowed) so the
+                    # run still produces an artifact we can inspect or upload
+                    # manually later.
+                    if keep_local:
+                        try:
+                            trainer.save_model(str(out_dir))
+                            tokenizer.save_pretrained(str(out_dir))
+                            logger.info("Saved local model/tokenizer as fallback")
+                            logged = True
+                        except Exception as e3:
+                            logger.error(f"Local save fallback failed: {e3}")
+        else:
+            logger.info("Autolog enabled; skipping explicit model log")
 
-        # Respect an explicit flag to keep a local copy of the model. By
-        # default (keep_local_copy=False) we prefer MLflow as the single
-        # source-of-truth and avoid duplicating local artifacts.
-        keep_local = False
-        try:
-            keep_local = bool(cfg.hparams.get("keep_local_copy", False))
-        except Exception:
-            # fallback if cfg.hparams is not a mapping-like object
-            try:
-                keep_local = bool(getattr(cfg.hparams, "keep_local_copy", False))
-            except Exception:
-                keep_local = False
+        # Respect cfg.hparams.keep_local_copy if present
+        keep_local = getattr(cfg.hparams, "keep_local_copy", False)
 
         if not logged and not autolog_enabled:
-            # Save locally then upload as artifacts (last-resort) only when
-            # explicitly requested via cfg.hparams.keep_local_copy.
             if keep_local:
                 trainer.save_model(str(out_dir))
                 tokenizer.save_pretrained(str(out_dir))
@@ -550,24 +628,7 @@ def main(cfg: DictConfig):
                 logger.info(
                     "Skipping local save/upload (keep_local_copy=False). Relying on MLflow logging instead."
                 )
-        elif not logged and autolog_enabled:
-            logger.info(
-                "Autolog enabled and explicit model logging not available; skipping local save/upload"
-            )
-            # Don't call mlflow.log_artifacts here when autolog is active to
-            # avoid duplicate artifact uploads — autologging should have
-            # already captured model artifacts. Keep a diagnostic listing to
-            # help debug empty-artifact cases.
-            try:
-                logger.info(f"Saved model files to: {out_dir.resolve()}")
-                for p in sorted(out_dir.rglob("**/*")):
-                    try:
-                        size = p.stat().st_size
-                    except Exception:
-                        size = -1
-                    logger.info(f"  {p.relative_to(out_dir)} ({size} bytes)")
-            except Exception as e:  # pragma: no cover - best-effort logging
-                logger.warning(f"Could not list out_dir contents: {e}")
+
         logger.info("Done. Launch MLflow UI with: mlflow ui --backend-store-uri mlruns")
 
     return 0
