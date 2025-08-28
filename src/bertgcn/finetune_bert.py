@@ -34,6 +34,7 @@ from torch.utils.data import Subset
 from transformers import (
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    EarlyStoppingCallback,
     Trainer,
     TrainingArguments,
     set_seed,
@@ -209,6 +210,14 @@ class WeightedTrainer(Trainer):
         that may pass additional arguments (e.g., num_items_in_batch).
         """
         labels = inputs.get("labels")
+        # Ensure labels are on the same device as logits and have integer dtype
+        if labels is not None:
+            device = (
+                next(model.parameters()).device
+                if any(True for _ in model.parameters())
+                else torch.device("cpu")
+            )
+            labels = labels.to(device).long()
         outputs = model(
             input_ids=inputs.get("input_ids"),
             attention_mask=inputs.get("attention_mask"),
@@ -280,6 +289,15 @@ def setup_trainer(
     if class_weights is not None:
         trainer_args["class_weights"] = class_weights
 
+    # Attach early stopping callback if configured
+    patience = getattr(cfg.hparams, "early_stopping_patience", None)
+    if patience is not None and int(patience) > 0:
+        trainer_args.setdefault("callbacks", [])
+        trainer_args["callbacks"].append(
+            EarlyStoppingCallback(early_stopping_patience=int(patience))
+        )
+        logger.info(f"Early stopping enabled with patience={patience}.")
+
     return trainer_cls(**trainer_args)
 
 
@@ -290,7 +308,26 @@ def main(cfg: DictConfig):
     tracking_uri = project_root / "mlruns"
     mlflow.set_tracking_uri(str(tracking_uri))
     mlflow.set_experiment(cfg.mlflow_experiment_name)
-    out_dir = Path(Path(cfg.hparams.model_name_or_path).name)
+    # Enable MLflow autologging for transformers (fallback to pytorch). This
+    # helps capture parameters, metrics and artifacts automatically when
+    # available.
+    try:
+        import mlflow.transformers as _mlt
+
+        _mlt.autolog()
+        logger.info("Enabled mlflow.transformers.autolog()")
+    except Exception:
+        try:
+            import mlflow.pytorch as _mlp
+
+            _mlp.autolog()
+            logger.info("Enabled mlflow.pytorch.autolog()")
+        except Exception:
+            logger.info("mlflow autolog not available; using manual logging.")
+    # Use the original working directory as project root and the Hydra run
+    # directory to construct an absolute output path. This avoids relying on
+    # nested `cfg.config` attributes which may not exist.
+    out_dir = project_root / Path(cfg.hydra.run.dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"MLflow tracking URI: {tracking_uri}")
 
@@ -308,17 +345,19 @@ def main(cfg: DictConfig):
     model.config.id2label = {i: lab for i, lab in enumerate(le.classes_)}
     model.config.label2id = {lab: i for i, lab in enumerate(le.classes_)}
 
-    trainer = setup_trainer(
-        model,
-        tokenizer,
-        train_ds,
-        val_ds,
-        str(out_dir),
-        cfg,
-        class_weights=class_weights,
-    )
-
     with mlflow.start_run():
+        # Create the Trainer inside the active MLflow run so autolog captures
+        # the training lifecycle and artifacts more reliably.
+        trainer = setup_trainer(
+            model,
+            tokenizer,
+            train_ds,
+            val_ds,
+            str(out_dir),
+            cfg,
+            class_weights=class_weights,
+        )
+
         mlflow.log_params(
             {
                 "model_name_or_path": cfg.hparams.model_name_or_path,
@@ -377,7 +416,70 @@ def main(cfg: DictConfig):
 
         trainer.save_model(str(out_dir))
         tokenizer.save_pretrained(str(out_dir))
-        mlflow.log_artifacts(str(out_dir), artifact_path="model")
+        # Diagnostic: log the files we are about to upload so we can debug
+        # empty-artifact cases. This prints relative paths and sizes.
+        try:
+            logger.info(f"Saved model files to: {out_dir.resolve()}")
+            for p in sorted(out_dir.rglob("**/*")):
+                try:
+                    size = p.stat().st_size
+                except Exception:
+                    size = -1
+                logger.info(f"  {p.relative_to(out_dir)} ({size} bytes)")
+        except Exception as e:  # pragma: no cover - best-effort logging
+            logger.warning(f"Could not list out_dir contents: {e}")
+
+        # Prefer MLflow-native model logging when available. Try
+        # mlflow.transformers.log_model first (captures tokenizer, model and
+        # flavor metadata). Fallback to mlflow.pytorch.log_model, and if
+        # neither is available fall back to uploading artifacts.
+        registered_name = None
+        try:
+            registered_name = cfg.mlflow_model_name
+        except Exception:
+            try:
+                registered_name = cfg.hparams.get("mlflow_model_name", None)
+            except Exception:
+                registered_name = None
+
+        logged = False
+        try:
+            import mlflow.transformers as mlt
+
+            mlt.log_model(
+                transformers_model=model,
+                artifact_path="model",
+                tokenizer=tokenizer,
+                registered_model_name=registered_name if registered_name else None,
+            )
+            logger.info("Logged model with mlflow.transformers.log_model()")
+            logged = True
+        except Exception:
+            try:
+                import mlflow.pytorch as mlp
+
+                # mlflow.pytorch.log_model accepts a PyTorch model; HF models
+                # subclass torch.nn.Module and the tokenizer should be
+                # separately saved as artifacts.
+                mlp.log_model(
+                    model,
+                    artifact_path="model",
+                    registered_model_name=registered_name if registered_name else None,
+                )
+                # also log tokenizer files
+                mlflow.log_artifacts(str(out_dir), artifact_path="model/tokenizer")
+                logger.info(
+                    "Logged model with mlflow.pytorch.log_model() and tokenizer artifacts"
+                )
+                logged = True
+            except Exception:
+                logger.info(
+                    "mlflow transformers/pytorch logging not available; falling back to artifact upload"
+                )
+
+        if not logged:
+            # Last-resort: upload the directory contents as run artifacts.
+            mlflow.log_artifacts(str(out_dir), artifact_path="model")
         logger.info("Done. Launch MLflow UI with: mlflow ui --backend-store-uri mlruns")
 
     return 0

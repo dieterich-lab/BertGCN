@@ -12,7 +12,7 @@ defaults:
 
 hydra:
   run:
-    dir: outputs/finetuned/${basename:${hparams.model_name_or_path}}/${now:%Y-%m-%d_%H-%M-%S}
+    dir: models/finetuned/${basename:${hparams.model_name_or_path}}/${now:%Y-%m-%d_%H-%M-%S}
   # This block provides the values that will override the defaults
   # set by the Optuna plugin's own configuration.
   sweep:
