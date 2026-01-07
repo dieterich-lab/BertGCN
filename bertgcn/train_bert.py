@@ -22,6 +22,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, Tuple
 
+import hydra
 import joblib
 import mlflow
 import numpy as np
@@ -42,8 +43,6 @@ from transformers import (
 )
 from transformers.data.data_collator import DataCollatorWithPadding
 from transformers.training_args import IntervalStrategy, SaveStrategy
-
-import hydra
 
 OmegaConf.register_new_resolver("basename", lambda p: Path(p).name)
 
@@ -384,7 +383,7 @@ def setup_trainer(
     return trainer_cls(**trainer_args)
 
 
-@hydra.main(version_base=None, config_path="../../conf", config_name="config")
+@hydra.main(version_base=None, config_path="../conf", config_name="mode/finetune")
 def main(cfg: DictConfig):
     set_seed(cfg.hparams.seed)
     try:

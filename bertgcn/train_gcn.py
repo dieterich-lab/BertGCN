@@ -422,13 +422,13 @@ def evaluate(
     return acc
 
 
-@hydra.main(
-    version_base=None, config_path="../../conf", config_name="minimal_gcn_config"
-)
+@hydra.main(version_base=None, config_path="../conf", config_name="mode/train_gcn")
 def main(cfg: DictConfig) -> float:
     """Main training function."""
     # Setup logging
-    logging.basicConfig(level=logging.INFO)
+    from .logging_config import setup_logging
+
+    setup_logging()
     logger = logging.getLogger(__name__)
 
     logger.info("Starting Minimal GCN Training")
@@ -513,7 +513,6 @@ def main(cfg: DictConfig) -> float:
         test_loader = DataLoader(TensorDataset(test_indices), batch_size=64)
 
         # Training loop
-        best_val_acc = 0.0
         for epoch in range(cfg.training.epochs):
             model.train()
             epoch_loss = 0.0
@@ -552,11 +551,7 @@ def main(cfg: DictConfig) -> float:
             # Update features for next epoch
             data = update_features(cfg.hparams.model_name_or_path, data, device)
 
-            # Save best model
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-                torch.save(model.state_dict(), "best_model.pt")
-                mlflow.log_artifact("best_model.pt")
+            # Save best model (removed, save only final)
 
         # Final evaluation
         test_acc = evaluate(model, data, data["test_mask"], device)
@@ -564,6 +559,57 @@ def main(cfg: DictConfig) -> float:
 
         logger.info(f"Final Test Accuracy: {test_acc:.4f}")
         logger.info("Training completed!")
+
+        # Save final model hierarchically
+        import os
+        from pathlib import Path
+
+        final_model_dir = Path("models/final_model")
+        final_model_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save model state dict
+        torch.save(model.state_dict(), final_model_dir / "pytorch_model.bin")
+
+        # Save tokenizer (same as BERT tokenizer used)
+        model.tokenizer.save_pretrained(final_model_dir)
+
+        # Save model config in transformers format
+        config_dict = {
+            "model_type": "bertgcn",
+            "pretrained_model": cfg.hparams.model_name_or_path,
+            "n_classes": cfg.model.n_classes,
+            "n_features": cfg.model.n_features,
+            "hidden_dim": cfg.model.hidden_dim,
+            "mix_factor": cfg.gcn.mix_factor,
+            "gcn_layers": cfg.gcn.gcn_layers,
+            "dropout": cfg.model.dropout,
+            "architectures": ["BertGCN"],
+        }
+        with open(final_model_dir / "config.json", "w") as f:
+            import json
+
+            json.dump(config_dict, f, indent=2)
+
+        # Save training args for compatibility
+        training_args = {
+            "output_dir": str(final_model_dir),
+            "num_train_epochs": cfg.training.epochs,
+            "per_device_train_batch_size": 64,  # From dataloader
+            "per_device_eval_batch_size": 64,
+            "learning_rate": cfg.training.lr,
+            "weight_decay": 0.01,
+            "adam_beta1": 0.9,
+            "adam_beta2": 0.999,
+            "adam_epsilon": 1e-8,
+            "max_grad_norm": 1.0,
+        }
+        with open(final_model_dir / "training_args.bin", "wb") as f:
+            import pickle
+
+            pickle.dump(training_args, f)
+
+        logger.info(f"Saved final model to {final_model_dir}")
+        mlflow.log_artifact(str(final_model_dir), artifact_path="final_model")
 
         return test_acc
 

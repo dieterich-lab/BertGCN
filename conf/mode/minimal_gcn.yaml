@@ -1,0 +1,39 @@
+# @package _global_
+
+# Minimal GCN training mode
+mode: minimal_gcn
+
+# Random seed
+seed: 42
+
+# Development mode (limits to 1 epoch for quick testing)
+dev: false
+
+# Override experiment name
+mlflow_experiment_name: "minimal_gcn_training"
+
+# Override data configuration for GCN
+data:
+  train_ratio: 0.7
+  val_ratio: 0.15
+  graph_dataset: "data/ind.medindcls_letter_letter"
+  use_graph_data: true
+
+# Model configuration for GCN
+model:
+  n_features: 768
+  n_hidden: 200
+  dropout: 0.5
+
+# GCN-specific configuration
+gcn:
+  mix_factor: 0.7
+  gcn_layers: 2
+  n_hidden: 200
+  dropout: 0.5
+
+# Training configuration for GCN
+training:
+  lr: 0.001
+  bert_lr: 0.00001
+  epochs: 50

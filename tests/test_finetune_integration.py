@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from datasets import Dataset
 
-import bertgcn.finetune_bert as fb
+import bertgcn.train_bert as fb
 
 
 def make_dummy_trainer(out_dir):

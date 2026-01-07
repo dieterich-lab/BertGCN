@@ -1,0 +1,14 @@
+# @package _global_
+
+# Minimal BERT training mode
+mode: minimal_bert
+
+# Override experiment name
+mlflow_experiment_name: "minimal_bert_training"
+
+# Override hyperparameters for minimal training
+hparams:
+  num_train_epochs: 1  # Minimal epochs for quick testing
+  batch_size: 8  # Smaller batch for minimal
+  eval_steps: 50
+  save_steps: 50

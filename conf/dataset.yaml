@@ -1,9 +1,0 @@
-
-dataset:
-  doclevel: "letter"
-  task: "MIC"
-  test_unclear: False
-
-  # Ratios for standard split
-  train_ratio: 0.7
-  val_ratio: 0.1 # The rest (0.2) will be for the test set

@@ -1,40 +1,71 @@
-defaults:
-  # 1. Load your application's config groups first.
-  - main
-  - hparams
-  - dataset
+# @package _global_
 
-  # 2. IMPORTANT: This line is mandatory. It tells Hydra to swap out the
-  #    default sweeper schema for the Optuna sweeper schema. This is
-  #    what makes keys like 'direction' and 'params' valid.
-  - override hydra/sweeper: optuna
+defaults:
+  - mode: ???
   - _self_
 
+# Core settings
+mode: null
+
+# Main config for BertGCN
+project_name: "BertGCN"
+mlflow_experiment_name: "bertgcn_finetuning"
+testonly: false
+
+# Optional override; if unset we force a central file-based store at project root.
+# Can also be provided via environment variable MLFLOW_TRACKING_URI.
+mlflow_tracking_uri: ${oc.env:MLFLOW_TRACKING_URI, null}
+
+# Dataset configuration
+dataset:
+  data_name: "medindcls_letter"
+  doclevel: "letter"
+  task: "MIC"
+  test_unclear: False
+  # Ratios for standard split
+  train_ratio: 0.7
+  val_ratio: 0.1 # The rest (0.2) will be for the test set
+
+# Hyperparameters
+hparams:
+  model_name_or_path: "/prj/doctoral_letters/PETGUI/med_bert_local"
+  seed: 42
+  learning_rate: 2e-5
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  num_train_epochs: 50
+  batch_size: 16 # Smaller default for single GPU
+  eval_steps: 100
+  save_steps: 100
+  early_stopping_patience: 3
+  fp16: False
+  gradient_accumulation_steps: 1
+  use_stratified_split: True
+  use_class_weights: True
+
+# XAI configuration
+xai:
+  enabled: true
+  shap_num_background: 20      # number of background texts for SHAP
+  shap_num_samples: 40         # number of samples to explain with SHAP text plots
+  lime_num_samples: 10         # number of samples to explain with LIME
+  max_tokens_for_xai: 512      # truncate to this many tokens for speed
+  seed: 42
+
+# Hydra configuration
 hydra:
   run:
-    # Use an outputs directory for ephemeral run outputs by default. This
-    # avoids populating `models/finetuned` unless explicitly requested.
-    dir: hydra/finetune/${now:%Y-%m-%d_%H-%M-%S}
-  # This block provides the values that will override the defaults
-  # set by the Optuna plugin's own configuration.
+    dir: outputs/${mode}/${now:%Y-%m-%d_%H-%M-%S}
   sweep:
     dir: multirun/${now:%Y-%m-%d_%H-%M-%S}
     subdir: ${hydra.job.num}
-
   sweeper:
-    # We are overriding the default Optuna values here.
+    # Optuna sweeper for hyperparameter optimization
     direction: maximize
-    study_name: finetune_bert
+    study_name: bertgcn_optimization
     storage: null
     n_trials: 20
     n_jobs: 1
-
-    # Define the search space
     params:
       hparams.learning_rate: loguniform(1e-6, 1e-4)
       hparams.batch_size: categorical(8, 16, 32)
-
-# Default convenience values for hyperparameters. Keep local copy off by default
-# to avoid redundant local artifacts; set hparams.keep_local_copy=true to keep a copy.
-hparams:
-  keep_local_copy: false

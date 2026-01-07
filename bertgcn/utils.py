@@ -148,12 +148,13 @@ def load_corpus(dataset_str):
                 objects.append(pkl.load(f))
 
     x, y, vx, vy, tx, ty, allx, ally, adj = tuple(objects)
-    y = y.toarray()
-    vy = vy.toarray()
-    ty = ty.toarray()
+    # Convert sparse matrices to dense if necessary
+    y = y.toarray() if hasattr(y, "toarray") else y
+    vy = vy.toarray() if hasattr(vy, "toarray") else vy
+    ty = ty.toarray() if hasattr(ty, "toarray") else ty
     # print(x.shape, y.shape, vx.shape, vy.shape, tx.shape, ty.shape, allx.shape, ally.shape)
 
-    features = sp.vstack((allx, vx, tx)).tolil()
+    features = sp.vstack((allx, vx, tx)).tocsr()
     labels = np.vstack((ally, vy, ty))
     # print(len(labels))
 

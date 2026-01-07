@@ -9,7 +9,7 @@ import torch
 from datasets import Dataset
 from omegaconf import OmegaConf
 
-import bertgcn.finetune_bert as fb
+import bertgcn.train_bert as fb
 
 
 @pytest.fixture()
