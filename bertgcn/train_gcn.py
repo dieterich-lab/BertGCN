@@ -577,9 +577,9 @@ def main(cfg: DictConfig) -> float:
         config_dict = {
             "model_type": "bertgcn",
             "pretrained_model": cfg.hparams.model_name_or_path,
-            "n_classes": cfg.model.n_classes,
+            "n_classes": n_classes,
             "n_features": cfg.model.n_features,
-            "hidden_dim": cfg.model.hidden_dim,
+            "hidden_dim": cfg.gcn.n_hidden,
             "mix_factor": cfg.gcn.mix_factor,
             "gcn_layers": cfg.gcn.gcn_layers,
             "dropout": cfg.model.dropout,

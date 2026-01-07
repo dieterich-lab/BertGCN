@@ -239,6 +239,7 @@ def setup_trainer(
         "report_to": ["mlflow"],
         "load_best_model_at_end": True,
         "metric_for_best_model": "f1",
+        "fp16": cfg.hparams.fp16,
     }
     # Filter to parameters actually accepted by TrainingArguments.__init__
     try:
