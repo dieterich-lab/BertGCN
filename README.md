@@ -45,8 +45,8 @@ Input files must be CSV format with columns for diagnosis, anamnesis, risk_facto
 |--------------|-----------------------------------------------------------------------------|---------------------------|
 | preprocess   | Clean and tokenize the dataset.                                            | Data preparation          |
 | build-graph  | Build the document-word graph via PMI and TF-IDF edges.                    | Graph construction       |
-| train_bert   | Fine-tune BERT for document classification.                                 | Baseline model            |
-| train_gcn    | Train the BertGCN ensemble model.                                          | Main model                |
+| finetune     | Fine-tune BERT for document classification.                                 | Baseline model            |
+| train        | Train the BertGCN ensemble model.                                          | Main model                |
 | predict      | Run inference/prediction on new data.                                       | Evaluation                |
 | interpret    | Feature importance/interpretation using SHAP.                              | Model explanation         |
 
@@ -54,13 +54,18 @@ Input files must be CSV format with columns for diagnosis, anamnesis, risk_facto
 
 - Preprocessing and graph building are prerequisites for training.
 - BERT fine-tuning provides a strong baseline for comparison with BertGCN.
+- All commands support both CLI (`poetry run bertgcn <command>`) and direct script (`poetry run <command>`) execution.
 
 ### Mode Quickstart
 
 **Preprocess**
 
 ```bash
+# CLI approach
 poetry run bertgcn preprocess
+
+# Direct script approach
+poetry run preprocess mode=preprocess
 ```
 
 - Output: `data/processed/tokenized_dataset` plus label encoders.
@@ -68,7 +73,11 @@ poetry run bertgcn preprocess
 **Build-graph**
 
 ```bash
+# CLI approach
 poetry run bertgcn build-graph
+
+# Direct script approach  
+poetry run build-graph [options]
 ```
 
 - Output: Graph components in `data/ind.*` files.
@@ -76,7 +85,11 @@ poetry run bertgcn build-graph
 **Train BERT**
 
 ```bash
+# CLI approach
 poetry run bertgcn finetune
+
+# Direct script approach
+poetry run finetune mode=finetune [overrides]
 ```
 
 - Output: Fine-tuned BERT model in `models/finetuned/`.
@@ -84,7 +97,11 @@ poetry run bertgcn finetune
 **Train GCN**
 
 ```bash
+# CLI approach
 poetry run bertgcn train
+
+# Direct script approach
+poetry run train mode=train [overrides]
 ```
 
 - Output: Trained BertGCN model in `models/final_model/`.
@@ -92,7 +109,11 @@ poetry run bertgcn train
 **Predict**
 
 ```bash
+# CLI approach
 poetry run bertgcn predict
+
+# Direct script approach
+poetry run predict mode=train [overrides]
 ```
 
 - Requires trained model; outputs predictions CSV.
@@ -100,7 +121,11 @@ poetry run bertgcn predict
 **Interpret**
 
 ```bash
+# CLI approach
 poetry run bertgcn interpret
+
+# Direct script approach
+poetry run interpret mode=train [overrides]
 ```
 
 - Outputs SHAP-based feature importance.
@@ -109,22 +134,55 @@ poetry run bertgcn interpret
 
 ## 🛠️ Usage
 
-Run any mode with:
+BertGCN provides two ways to run commands:
 
+### CLI Approach (Recommended for interactive use)
 ```bash
 poetry run bertgcn {preprocess | build-graph | finetune | train | predict | interpret}
 ```
+
+### Direct Script Approach (Recommended for automation/SLURM)
+```bash
+poetry run {preprocess | build-graph | finetune | train | predict | interpret} mode=<mode> [overrides]
+```
+
+Both approaches support runtime parameter overrides (e.g., `training.epochs=5`).
 
 ### Quickstart Commands
 
 With default configs, run the pipeline sequentially:
 
+#### CLI Approach
 ```bash
 poetry run bertgcn preprocess
 poetry run bertgcn build-graph
 poetry run bertgcn finetune
 poetry run bertgcn train
 poetry run bertgcn predict
+```
+
+#### Direct Script Approach (for automation)
+```bash
+poetry run preprocess mode=preprocess
+poetry run build-graph [options]
+poetry run finetune mode=finetune
+poetry run train mode=train
+poetry run predict mode=train
+```
+
+### Advanced Interpretability
+
+For detailed document-level interpretability analysis:
+
+```bash
+# Neighbor-based influence scoring
+poetry run interpret-docs-neighbors mode=train
+
+# Integrated Gradients attribution
+poetry run interpret-docs-ig mode=train
+
+# SHAP perturbation analysis  
+poetry run interpret-docs-shap mode=train
 ```
 
 ### Runtime Overrides
@@ -195,6 +253,8 @@ outputs/
 │           │   └── meta.yaml
 │           └── meta.yaml
 └── train_gcn/               # BertGCN training outputs
+    ├── checkpoints/         # Training checkpoints for resuming
+    │   └── checkpoint_epoch_*.pt
     ├── hydra/               # Hydra run directories (one per run)
     │   └── <timestamp>/     # e.g., 2025-08-29_00-08-27/
     │       ├── config.yaml  # Resolved configuration
@@ -210,15 +270,20 @@ outputs/
             │   └── meta.yaml
             └── meta.yaml
 
-models/                      # Final trained models (legacy location)
+models/                      # Final trained models
 ├── finetuned/               # BERT fine-tuning results
 │   └── <timestamp>/
 │       ├── pytorch_model.bin
 │       ├── config.json
 │       └── label_encoder.joblib
 └── final_model/             # BertGCN final model
-    ├── model.pt
-    └── config.json
+    ├── pytorch_model.bin
+    ├── config.json
+    ├── special_tokens_map.json
+    ├── tokenizer_config.json
+    ├── tokenizer.json
+    ├── vocab.txt
+    └── training_args.bin
 
 data/                        # Processed data and graphs
 ├── processed/
@@ -266,7 +331,7 @@ Tracks parameters, metrics, and artifacts automatically for each run.
 Three complementary approaches explain a document's prediction by citing influential *documents* (precedents). All assume a trained BertGCN and the graph with edge weights.
 
 - **A. Neighbor scoring (fast, edge-weighted GCN probs)**
-  - Script: `poetry run python -m bertgcn.interpret_docs_neighbors`
+  - Script: `poetry run interpret-docs-neighbors mode=train`
   - How it works: For a target doc *t* with predicted class *c*, each incoming
     neighbor *j* gets a score `edge_weight(j→t) * P_c(j)` using the GCN class
     probability of *j*. Top-k neighbors are returned.
@@ -274,14 +339,14 @@ Three complementary approaches explain a document's prediction by citing influen
     `top_neighbors` and `neighbor_scores`.
 
 - **B. Integrated Gradients over document features (gradient-based)**
-  - Script: `poetry run python -m bertgcn.interpret_docs_ig`
+  - Script: `poetry run interpret-docs-ig mode=train`
   - How it works: Runs IG on the full document feature matrix for the target
     doc and class; sums attributions per document to produce a ranked list of
     influential documents.
   - Output: `outputs/train_gcn/interpret/document_influence_ig.csv`.
 
 - **C. SHAP-style neighbor perturbation (leave-one-out edges)**
-  - Script: `poetry run python -m bertgcn.interpret_docs_shap`
+  - Script: `poetry run interpret-docs-shap mode=train`
   - How it works: For each incoming neighbor edge to the target doc, removes
     the edge and measures the drop in the target class probability. The delta
     serves as the neighbor's importance (SHAP-like intuition without full
@@ -290,7 +355,7 @@ Three complementary approaches explain a document's prediction by citing influen
 
 **Config knobs (Hydra via mode/train_gcn):** `interpretation.top_k` (default 5),
 `interpretation.max_docs` (optional), plus model/graph settings. Models load
-from `outputs/train_gcn/final_model/pytorch_model.bin` when present.
+from `models/final_model/pytorch_model.bin` when present.
 
 ---
 

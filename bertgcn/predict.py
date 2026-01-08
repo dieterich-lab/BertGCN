@@ -4,11 +4,12 @@ import sys
 from pathlib import Path
 from typing import Tuple
 
+import hydra
 import joblib
 import numpy as np
 import torch
 from datasets import Dataset, load_from_disk
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Subset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
@@ -113,5 +114,9 @@ def predict(cfg: DictConfig) -> None:
     logger.info(f"Predictions saved to {output_file}")
 
 
+@hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: DictConfig):
+    # Allow legacy overrides that address keys not present in the base config
+    OmegaConf.set_struct(cfg, False)
+
     predict(cfg)

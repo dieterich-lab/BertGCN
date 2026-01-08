@@ -1,0 +1,8 @@
+# @package _global_
+
+# Preprocessing mode
+mode: preprocess
+
+# Disable optimization sweeper for preprocessing
+hydra:
+  sweeper: null

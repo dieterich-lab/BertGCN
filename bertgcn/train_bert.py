@@ -525,8 +525,11 @@ def setup_trainer(
     return trainer_cls(**trainer_args)
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="mode/finetune")
+@hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: DictConfig):
+    # Allow legacy overrides that address keys not present in the base config
+    OmegaConf.set_struct(cfg, False)
+
     set_seed(cfg.hparams.seed)
     try:
         project_root = Path(get_original_cwd())

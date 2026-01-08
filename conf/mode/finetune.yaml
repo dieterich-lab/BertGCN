@@ -30,3 +30,7 @@ hparams:
   gradient_accumulation_steps: 1
   use_stratified_split: True
   use_class_weights: True
+
+# Disable optimization sweeper for finetuning
+hydra:
+  sweeper: null

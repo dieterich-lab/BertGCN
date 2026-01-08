@@ -14,7 +14,7 @@ import nltk
 import pandas as pd
 from datasets import Dataset
 from nltk.corpus import stopwords
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 from sklearn.preprocessing import LabelEncoder
 from transformers import AutoTokenizer
 
@@ -48,6 +48,8 @@ def preprocess(cfg: DictConfig) -> None:
     5.  Saves the processed dataset to disk in Arrow format.
     6.  Saves the fitted label encoders for later use.
     """
+    # Allow legacy overrides that address keys not present in the base config
+    OmegaConf.set_struct(cfg, False)
     logger.info("Starting data preprocessing...")
 
     # --- 1. Define paths and clean output directory ---

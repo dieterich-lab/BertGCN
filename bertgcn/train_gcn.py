@@ -539,9 +539,12 @@ def evaluate(
     return acc
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="mode/train_gcn")
+@hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: DictConfig) -> float:
     """Main training function."""
+    # Allow legacy overrides that address keys not present in the base config
+    OmegaConf.set_struct(cfg, False)
+
     # Setup improved logging
     logger = _get_logger()
 
@@ -630,9 +633,29 @@ def main(cfg: DictConfig) -> float:
         val_loader = DataLoader(TensorDataset(val_indices), batch_size=64)
         test_loader = DataLoader(TensorDataset(test_indices), batch_size=64)
 
+        # Setup checkpoint directory
+        checkpoint_dir = Path("outputs/train_gcn/checkpoints")
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        # Check for latest checkpoint to resume
+        checkpoints = list(checkpoint_dir.glob("checkpoint_epoch_*.pt"))
+        start_epoch = 0
+        if checkpoints:
+            latest_checkpoint = max(
+                checkpoints, key=lambda x: int(x.stem.split("_")[-1])
+            )
+            checkpoint = torch.load(latest_checkpoint, map_location=device)
+            model.load_state_dict(checkpoint["model_state_dict"])
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            start_epoch = checkpoint["epoch"]
+            logger.info(
+                f"📂 Resumed from checkpoint: {latest_checkpoint} at epoch {start_epoch}"
+            )
+
         # Training loop
         logger.info("🏃 Starting training loop...")
-        for epoch in range(cfg.training.epochs):
+        for epoch in range(start_epoch, cfg.training.epochs):
             model.train()
             epoch_loss = 0.0
             for batch in train_loader:
@@ -668,6 +691,23 @@ def main(cfg: DictConfig) -> float:
 
             scheduler.step()
 
+            # Save checkpoint every 10 epochs or at the end
+            if (epoch + 1) % 10 == 0 or epoch == cfg.training.epochs - 1:
+                checkpoint_path = checkpoint_dir / f"checkpoint_epoch_{epoch+1}.pt"
+                torch.save(
+                    {
+                        "epoch": epoch + 1,
+                        "model_state_dict": model.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "scheduler_state_dict": scheduler.state_dict(),
+                        "loss": epoch_loss,
+                    },
+                    checkpoint_path,
+                )
+                logger.info(
+                    f"💾 Checkpoint saved at epoch {epoch+1}: {checkpoint_path}"
+                )
+
             # Update features for next epoch
             data = update_features(cfg.hparams.model_name_or_path, data, device)
 
@@ -694,7 +734,7 @@ def main(cfg: DictConfig) -> float:
         logger.info("✅ Training completed successfully!")
 
         # Save final model hierarchically
-        final_model_dir = Path("outputs/train_gcn/final_model")
+        final_model_dir = Path("models/final_model")
         final_model_dir.mkdir(parents=True, exist_ok=True)
 
         # Save model state dict

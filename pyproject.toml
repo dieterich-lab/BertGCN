@@ -69,7 +69,16 @@ line_length = 88
 
 [tool.poetry.scripts]
 bertgcn = "bertgcn.cli:main"
+preprocess = "bertgcn.preprocess:preprocess"
 build-graph = "bertgcn.build_graph:main"
+finetune = "bertgcn.train_bert:main"
+train = "bertgcn.train_gcn:main"
+predict = "bertgcn.predict:main"
+interpret = "bertgcn.interpret:main"
+interpret-docs-neighbors = "bertgcn.interpret_docs_neighbors:main"
+interpret-docs-ig = "bertgcn.interpret_docs_ig:main"
+interpret-docs-shap = "bertgcn.interpret_docs_shap:main"
+# Legacy aliases for backward compatibility
 finetune-bert = "bertgcn.train_bert:main"
 train-bertgcn = "bertgcn.train_gcn:main"
 

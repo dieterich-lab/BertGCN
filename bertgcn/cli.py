@@ -27,7 +27,7 @@ def main():
     if command == "preprocess":
         from .preprocess import preprocess
 
-        preprocess()
+        preprocess(["override mode:preprocess"])
     elif command == "build-graph":
         from .build_graph import main as build_graph_main
 
@@ -41,11 +41,13 @@ def main():
             remaining_args = [arg for arg in remaining_args if arg != "--dev"]
             remaining_args.extend(["dev=true"])
 
-        train_main(remaining_args if remaining_args else None)
+        # Add mode override
+        remaining_args.insert(0, "override mode:train_gcn")
+        train_main(remaining_args if remaining_args else ["override mode:train_gcn"])
     elif command == "finetune":
         from .train_bert import main as finetune_main
 
-        finetune_main()
+        finetune_main(["override mode:finetune"])
     elif command == "predict":
         from .predict import main as predict_main
 
@@ -53,7 +55,7 @@ def main():
     elif command == "interpret":
         from .interpret import main as interpret_main
 
-        interpret_main()
+        interpret_main(["override mode:train_gcn"])
     else:
         print(f"Unknown command: {command}")
         print("Use 'bertgcn --help' for available commands")

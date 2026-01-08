@@ -18,7 +18,7 @@ from typing import Dict, List, Tuple
 import hydra
 import torch
 from hydra.utils import get_original_cwd
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from bertgcn.train_gcn import BertGCN, load_graph_data_from_disk, load_processed_dataset
 
@@ -34,9 +34,7 @@ def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
     )
     # Load checkpoint from the default final model path
     project_root = Path(get_original_cwd())
-    ckpt_path = (
-        project_root / "outputs" / "train_gcn" / "final_model" / "pytorch_model.bin"
-    )
+    ckpt_path = project_root / "models" / "final_model" / "pytorch_model.bin"
     if ckpt_path.exists():
         state = torch.load(ckpt_path, map_location="cpu")
         model.load_state_dict(state, strict=False)
@@ -129,8 +127,11 @@ def run_document_influence(cfg: DictConfig):
     print(f"Document-level influence saved to {out_file}")
 
 
-@hydra.main(version_base=None, config_path="../conf", config_name="mode/train_gcn")
+@hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: DictConfig):
+    # Allow legacy overrides that address keys not present in the base config
+    OmegaConf.set_struct(cfg, False)
+
     run_document_influence(cfg)
 
 
