@@ -35,16 +35,7 @@ from transformers import AutoModel, AutoTokenizer
 from bertgcn.utils import load_corpus
 
 # Suppress BERT pooler warnings that are not relevant for BertGCN
-warnings.filterwarnings(
-    "ignore",
-    message=r".*Some weights of BertModel were not initialized.*",
-    category=UserWarning,
-)
-warnings.filterwarnings(
-    "ignore",
-    message=r".*You should probably TRAIN this model on a down-stream task.*",
-    category=UserWarning,
-)
+warnings.simplefilter("ignore", UserWarning)
 
 
 def _get_logger():
