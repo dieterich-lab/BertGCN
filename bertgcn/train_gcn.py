@@ -564,7 +564,7 @@ def main(cfg: DictConfig) -> float:
         import os
         from pathlib import Path
 
-        final_model_dir = Path("models/final_model")
+        final_model_dir = Path("outputs/train_gcn/models/final_model")
         final_model_dir.mkdir(parents=True, exist_ok=True)
 
         # Save model state dict

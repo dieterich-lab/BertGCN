@@ -6,6 +6,9 @@ mode: finetune
 # Override experiment name for finetuning
 mlflow_experiment_name: "bertgcn_finetuning"
 
+# Override MLflow tracking URI for BERT
+mlflow_tracking_uri: "file:outputs/train_bert/mlruns"
+
 # BERT hyperparameters (needed for finetuning)
 hparams:
   model_name_or_path: "/prj/doctoral_letters/PETGUI/med_bert_local"

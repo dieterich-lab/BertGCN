@@ -12,6 +12,9 @@ dev: false
 # MLflow experiment name for GCN training
 mlflow_experiment_name: "minimal_gcn_training"
 
+# Override MLflow tracking URI for GCN
+mlflow_tracking_uri: "file:outputs/train_gcn/mlruns"
+
 # BERT hyperparameters (needed for BertGCN)
 hparams:
   model_name_or_path: "/prj/doctoral_letters/PETGUI/med_bert_local"

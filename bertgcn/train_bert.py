@@ -651,10 +651,10 @@ def main(cfg: DictConfig):
         keep_local = getattr(cfg.hparams, "keep_local_copy", False)
 
         # Final model persistence policy: always save a consolidated copy to
-        # models/finetuned/<timestamp>. This decouples long-term artifact from
+        # outputs/train_bert/models/finetuned/<timestamp>. This decouples long-term artifact from
         # the transient hydra run directory.
         timestamp = Path(hydra_run_dir).name
-        final_dir = project_root / "models" / "finetuned" / timestamp
+        final_dir = project_root / "outputs" / "train_bert" / "models" / "finetuned" / timestamp
         final_dir.mkdir(parents=True, exist_ok=True)
         try:
             trainer.save_model(str(final_dir))
