@@ -35,7 +35,7 @@ from transformers import AutoModel, AutoTokenizer
 from bertgcn.utils import load_corpus
 
 # Suppress BERT pooler warnings that are not relevant for BertGCN
-warnings.simplefilter("ignore", UserWarning)
+warnings.simplefilter("ignore")
 
 
 def _get_logger():
