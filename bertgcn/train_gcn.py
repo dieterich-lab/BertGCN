@@ -11,8 +11,10 @@ This version uses the same processed dataset as finetune_bert.py
 
 # Suppress all warnings and logging messages
 import warnings
+
 warnings.simplefilter("ignore")
 import logging
+
 logging.getLogger().setLevel(logging.ERROR)
 
 import logging
@@ -418,13 +420,21 @@ def update_features(
     """Update document features using BERT."""
     print("Starting update_features", flush=True)
     from transformers import AutoModel
+    import os
 
-    # Temporarily disable logging warnings
-    logging.disable(logging.WARNING)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        bert_model = AutoModel.from_pretrained(model_name).to(device)
-    logging.disable(logging.NOTSET)
+    # Temporarily redirect stdout and stderr to suppress warnings
+    stdout_fd = os.dup(1)
+    stderr_fd = os.dup(2)
+    with open(os.devnull, 'w') as devnull:
+        os.dup2(devnull.fileno(), 1)
+        os.dup2(devnull.fileno(), 2)
+        try:
+            bert_model = AutoModel.from_pretrained(model_name).to(device)
+        finally:
+            os.dup2(stdout_fd, 1)
+            os.dup2(stderr_fd, 2)
+            os.close(stdout_fd)
+            os.close(stderr_fd)
     bert_model.eval()
     doc_mask = data["train_mask"] | data["val_mask"] | data["test_mask"]
     doc_indices = torch.where(doc_mask)[0]
