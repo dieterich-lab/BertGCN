@@ -562,7 +562,9 @@ def main(cfg: DictConfig) -> float:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"🖥️  Using device: {device}")
 
-    # Setup MLflow
+    # Setup MLflow to write inside outputs/train_gcn
+    if cfg.get("mlflow_tracking_uri"):
+        mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
     mlflow.set_experiment(cfg.mlflow_experiment_name)
     with mlflow.start_run():
         # Log parameters

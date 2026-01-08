@@ -532,13 +532,12 @@ def main(cfg: DictConfig):
         project_root = Path(get_original_cwd())
     except Exception:
         project_root = Path.cwd()
-        # Respect an externally configured MLflow tracking URI (e.g. tests that
-        # set a temporary mlruns directory). Only set a sensible default pointing
-        # into the project when the URI appears to be the library default.
+    # Prefer explicit config URI; otherwise fall back to project-local mlruns.
+    if cfg.get("mlflow_tracking_uri"):
+        mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
+        logger.info(f"Using configured MLflow tracking URI: {cfg.mlflow_tracking_uri}")
+    else:
         current_uri = mlflow.get_tracking_uri()
-        # mlflow default is typically 'file:./mlruns' when unset. If the current
-        # URI is that default, override to project-root/mlruns so CLI runs keep
-        # artifacts inside the repository. Otherwise, respect the external URI.
         if current_uri and current_uri != "file:./mlruns":
             tracking_uri = current_uri
             logger.info(f"Using existing MLflow tracking URI: {tracking_uri}")
