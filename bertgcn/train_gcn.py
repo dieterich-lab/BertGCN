@@ -11,6 +11,7 @@ This version uses the same processed dataset as finetune_bert.py
 
 import logging
 import random
+import warnings
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
@@ -32,6 +33,19 @@ from torch_geometric.utils import dense_to_sparse
 from transformers import AutoModel, AutoTokenizer
 
 from bertgcn.utils import load_corpus
+
+
+# Suppress BERT pooler warnings that are not relevant for BertGCN
+warnings.filterwarnings(
+    "ignore",
+    message="Some weights of BertModel were not initialized from the model checkpoint",
+    category=UserWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message="You should probably TRAIN this model on a down-stream task",
+    category=UserWarning,
+)
 
 
 def _get_logger():

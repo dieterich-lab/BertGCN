@@ -47,6 +47,19 @@ from transformers.training_args import IntervalStrategy, SaveStrategy
 OmegaConf.register_new_resolver("basename", lambda p: Path(p).name)
 
 
+# Suppress BERT pooler warnings that are not relevant for fine-tuning
+warnings.filterwarnings(
+    "ignore",
+    message="Some weights of.*were not initialized from the model checkpoint",
+    category=UserWarning,
+)
+warnings.filterwarnings(
+    "ignore",
+    message="You should probably TRAIN this model on a down-stream task",
+    category=UserWarning,
+)
+
+
 def _get_logger():
     import logging
 
