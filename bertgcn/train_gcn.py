@@ -10,12 +10,21 @@ This version uses the same processed dataset as finetune_bert.py
 """
 
 # Suppress all warnings and logging messages
+import os
 import warnings
+
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
+os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
 warnings.simplefilter("ignore")
 import logging
 
 logging.getLogger().setLevel(logging.ERROR)
+from transformers import logging as hf_logging
+
+hf_logging.set_verbosity_error()
+hf_logging.disable_progress_bar()
 
 import logging
 import random
@@ -419,13 +428,14 @@ def update_features(
 ):
     """Update document features using BERT."""
     print("Starting update_features", flush=True)
-    from transformers import AutoModel
     import os
+
+    from transformers import AutoModel
 
     # Temporarily redirect stdout and stderr to suppress warnings
     stdout_fd = os.dup(1)
     stderr_fd = os.dup(2)
-    with open(os.devnull, 'w') as devnull:
+    with open(os.devnull, "w") as devnull:
         os.dup2(devnull.fileno(), 1)
         os.dup2(devnull.fileno(), 2)
         try:
