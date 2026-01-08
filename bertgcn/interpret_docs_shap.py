@@ -1,16 +1,16 @@
-"""Document-level influence using SHAP-style neighbor perturbations.
+"""Document-level influence via SHAP-style edge perturbation (Approach C).
 
-For each target document, we approximate neighbor importance by measuring the
-change in predicted probability when removing each neighbor edge (leave-one-out
-perturbation). This provides a SHAP-like intuition without the cost of full
-KernelExplainer sampling.
+Idea: For a target doc and its predicted class, iteratively drop each incoming
+edge (neighbor j → target) and measure the drop in target-class probability.
+The probability delta is the neighbor's importance (SHAP-like, leave-one-out
+edge perturbation).
 
 Usage:
     poetry run python -m bertgcn.interpret_docs_shap
+Output:
+    outputs/train_gcn/interpret/document_influence_shap.csv
 Config:
-    - Uses mode/train_gcn config
-    - interpretation.top_k (default 5)
-    - interpretation.max_docs (optional)
+    interpretation.top_k (default 5), interpretation.max_docs (optional)
 """
 
 from pathlib import Path

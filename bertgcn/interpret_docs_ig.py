@@ -1,16 +1,16 @@
-"""Document-level influence using Integrated Gradients.
+"""Document-level influence via Integrated Gradients (Approach B).
 
-This script attributes a target document's prediction to *other documents* by
-running Integrated Gradients (IG) over the GCN input features (CLS embeddings).
-Attributions are aggregated per document (sum over feature dimensions) and then
-ranked to provide top-k influential documents for each target document.
+Idea: Run IG on the full document feature matrix for a target doc and its
+predicted class; aggregate IG attributions per document (sum over feature
+dimensions) and rank documents by importance. Self-attribution is zeroed before
+ranking.
 
 Usage:
     poetry run python -m bertgcn.interpret_docs_ig
+Output:
+    outputs/train_gcn/interpret/document_influence_ig.csv
 Config:
-    - Uses the train_gcn Hydra config (mode/train_gcn)
-    - interpretation.top_k (default 5)
-    - interpretation.max_docs (optional, limit number of target docs)
+    interpretation.top_k (default 5), interpretation.max_docs (optional)
 """
 
 from pathlib import Path

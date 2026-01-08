@@ -254,26 +254,36 @@ Tracks parameters, metrics, and artifacts automatically for each run.
 
 ## 🧭 Document-Level Interpretability (New)
 
-We provide three complementary approaches to explain a document's prediction by
-highlighting influential *documents* (precedents) rather than only token
-importance.
+Three complementary ways to explain a document's prediction by citing
+influential *documents* (precedents). All assume a trained BertGCN and the
+graph with edge weights.
 
-- **A. Neighbor scoring (edge-weighted GCN probs):**
+- **A. Neighbor scoring (fast, edge-weighted GCN probs)**
   - Script: `poetry run python -m bertgcn.interpret_docs`
-  - Idea: For a target doc, rank neighbors by `edge_weight * P(pred_class | neighbor)`.
-  - Output: `outputs/train_gcn/interpret/document_influence.csv` with `top_neighbors` and `neighbor_scores`.
+  - How it works: For a target doc *t* with predicted class *c*, each incoming
+    neighbor *j* gets a score `edge_weight(j→t) * P_c(j)` using the GCN class
+    probability of *j*. Top-k neighbors are returned.
+  - Output: `outputs/train_gcn/interpret/document_influence.csv` with
+    `top_neighbors` and `neighbor_scores`.
 
-- **B. Integrated Gradients over document features:**
+- **B. Integrated Gradients over document features (gradient-based)**
   - Script: `poetry run python -m bertgcn.interpret_docs_ig`
-  - Idea: IG on the full feature matrix; aggregate attributions per document and rank.
+  - How it works: Runs IG on the full document feature matrix for the target
+    doc and class; sums attributions per document to produce a ranked list of
+    influential documents.
   - Output: `outputs/train_gcn/interpret/document_influence_ig.csv`.
 
-- **C. SHAP-style neighbor perturbation (leave-one-out):**
+- **C. SHAP-style neighbor perturbation (leave-one-out edges)**
   - Script: `poetry run python -m bertgcn.interpret_docs_shap`
-  - Idea: For each neighbor, drop its edge and measure the drop in target prob (SHAP-like delta).
+  - How it works: For each incoming neighbor edge to the target doc, removes
+    the edge and measures the drop in the target class probability. The delta
+    serves as the neighbor's importance (SHAP-like intuition without full
+    kernel sampling).
   - Output: `outputs/train_gcn/interpret/document_influence_shap.csv`.
 
-**Config knobs (Hydra via mode/train_gcn):** `interpretation.top_k` (default 5), `interpretation.max_docs` (optional) and `hparams.model_name_or_path`, `gcn.*` as usual. Models are loaded from `outputs/train_gcn/final_model/pytorch_model.bin` when present.
+**Config knobs (Hydra via mode/train_gcn):** `interpretation.top_k` (default 5),
+`interpretation.max_docs` (optional), plus model/graph settings. Models load
+from `outputs/train_gcn/final_model/pytorch_model.bin` when present.
 
 ---
 

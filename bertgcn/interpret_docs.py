@@ -1,13 +1,15 @@
-"""Document-level interpretability for BertGCN.
+"""Document-level interpretability for BertGCN (Approach A: neighbor scoring).
 
-This script ranks influential documents for each target document prediction.
-It uses the trained GCN predictions and edge weights to score neighbors: for a
-target document t and predicted class c, each neighbor j contributes
-    score = edge_weight(j->t) * P_c(j)
-We then return the top-k neighbors per document.
+Idea: For a target document t and its predicted class c, each incoming neighbor
+node j contributes
+    score = edge_weight(j→t) * P_c(j)
+where P_c(j) is the GCN class probability of neighbor j. We rank neighbors by
+this score and return top-k influential documents.
 
 Run:
     poetry run python -m bertgcn.interpret_docs
+Output:
+    outputs/train_gcn/interpret/document_influence.csv
 """
 
 from pathlib import Path
@@ -18,11 +20,7 @@ import torch
 from hydra.utils import get_original_cwd
 from omegaconf import DictConfig, OmegaConf
 
-from bertgcn.train_gcn import (
-    BertGCN,
-    load_graph_data_from_disk,
-    load_processed_dataset,
-)
+from bertgcn.train_gcn import BertGCN, load_graph_data_from_disk, load_processed_dataset
 
 
 def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
@@ -36,7 +34,9 @@ def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
     )
     # Load checkpoint from the default final model path
     project_root = Path(get_original_cwd())
-    ckpt_path = project_root / "outputs" / "train_gcn" / "final_model" / "pytorch_model.bin"
+    ckpt_path = (
+        project_root / "outputs" / "train_gcn" / "final_model" / "pytorch_model.bin"
+    )
     if ckpt_path.exists():
         state = torch.load(ckpt_path, map_location="cpu")
         model.load_state_dict(state, strict=False)
@@ -86,16 +86,24 @@ def run_document_influence(cfg: DictConfig):
     data = load_graph_data_from_disk(cfg)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    data = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in data.items()}
+    data = {
+        k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in data.items()
+    }
 
     # Load model
-    model = _load_model(cfg, n_classes=n_classes, n_features=data["features"].shape[1]).to(device)
+    model = _load_model(
+        cfg, n_classes=n_classes, n_features=data["features"].shape[1]
+    ).to(device)
 
     with torch.no_grad():
-        log_probs = model.gcn(data["features"], data["edge_index"], data.get("edge_weight"))
+        log_probs = model.gcn(
+            data["features"], data["edge_index"], data.get("edge_weight")
+        )
         probs = torch.exp(log_probs)
 
-    neighbor_scores = _compute_neighbor_scores(probs.cpu(), data["edge_index"].cpu(), data["edge_weight"].cpu(), top_k)
+    neighbor_scores = _compute_neighbor_scores(
+        probs.cpu(), data["edge_index"].cpu(), data["edge_weight"].cpu(), top_k
+    )
 
     # Prepare output
     rows: List[Dict] = []
@@ -103,7 +111,9 @@ def run_document_influence(cfg: DictConfig):
         rows.append(
             {
                 "doc_id": doc_id,
-                "pred_label": label_encoder.inverse_transform([probs[doc_id].argmax().item()])[0],
+                "pred_label": label_encoder.inverse_transform(
+                    [probs[doc_id].argmax().item()]
+                )[0],
                 "top_neighbors": [n for n, _ in neigh_list],
                 "neighbor_scores": [s for _, s in neigh_list],
             }
