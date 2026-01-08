@@ -50,10 +50,138 @@ OmegaConf.register_new_resolver("basename", lambda p: Path(p).name)
 def _get_logger():
     import logging
 
-    logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO
+    # Create a custom formatter for better readability
+    class ColoredFormatter(logging.Formatter):
+        def format(self, record):
+            if record.levelno >= logging.ERROR:
+                color = "\033[91m"  # Red
+            elif record.levelno >= logging.WARNING:
+                color = "\033[93m"  # Yellow
+            elif record.levelno >= logging.INFO:
+                color = "\033[92m"  # Green
+            else:
+                color = "\033[0m"  # Reset
+
+            # Add special formatting for key metrics
+            if hasattr(record, "highlight") and record.highlight:
+                return f"\033[1;94m{'='*60}\n{record.getMessage()}\n{'='*60}\033[0m"
+            elif hasattr(record, "section") and record.section:
+                return f"\033[1;96m{'─'*50}\n{record.getMessage()}\n{'─'*50}\033[0m"
+            else:
+                return f"{color}{super().format(record)}\033[0m"
+
+    formatter = ColoredFormatter(
+        fmt="%(asctime)s - %(levelname)s - %(message)s", datefmt="%H:%M:%S"
     )
-    return logging.getLogger("finetune_bert")
+
+    logger = logging.getLogger("finetune_bert")
+    logger.setLevel(logging.INFO)
+
+    # Remove any existing handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+
+    # Add console handler with colored formatting
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    return logger
+
+
+def _format_metrics(metrics_dict, title="Metrics"):
+    """Format metrics dictionary into a clean, readable table."""
+    lines = [f"{title}:"]
+    lines.append("-" * 40)
+
+    for key, value in metrics_dict.items():
+        if isinstance(value, float):
+            # Format floats nicely
+            if key in ["accuracy", "f1", "precision", "recall"]:
+                lines.append(f"  {key.capitalize():<12}: {value:.1%}")
+            else:
+                lines.append(f"  {key.capitalize():<12}: {value:.4f}")
+        else:
+            lines.append(f"  {key.capitalize():<12}: {value}")
+
+    return "\n".join(lines)
+
+
+def _format_confusion_matrix(cm, labels, title="Confusion Matrix"):
+    """Format confusion matrix into a readable table."""
+    lines = [f"{title}:"]
+    lines.append("-" * 50)
+
+    # Header
+    header_parts = ["True\\Pred".ljust(15)] + [label.ljust(8) for label in labels]
+    header = "".join(header_parts)
+    lines.append(header)
+    lines.append("-" * len(header))
+
+    # Matrix rows
+    for i, (label, row) in enumerate(zip(labels, cm)):
+        row_parts = [label.ljust(15)] + [str(val).ljust(8) for val in row]
+        row_str = "".join(row_parts)
+        lines.append(row_str)
+
+    return "\n".join(lines)
+
+
+def _log_training_summary(cfg, val_metrics, test_metrics, final_dir, mlruns_path):
+    """Log a comprehensive training summary."""
+    summary_lines = []
+    summary_lines.append("🎯 TRAINING COMPLETED SUCCESSFULLY")
+    summary_lines.append("")
+    summary_lines.append("📊 BEST VALIDATION METRICS:")
+    summary_lines.append(
+        f"   • Accuracy:  {val_metrics.get('eval_accuracy', 'N/A'):.1%}"
+    )
+    summary_lines.append(f"   • F1 Score:  {val_metrics.get('eval_f1', 'N/A'):.3f}")
+    summary_lines.append(
+        f"   • Precision: {val_metrics.get('eval_precision', 'N/A'):.3f}"
+    )
+    summary_lines.append(f"   • Recall:    {val_metrics.get('eval_recall', 'N/A'):.3f}")
+    summary_lines.append("")
+    summary_lines.append("🧪 TEST SET PERFORMANCE:")
+    summary_lines.append(
+        f"   • Accuracy:  {test_metrics.get('eval_accuracy', 'N/A'):.1%}"
+    )
+    summary_lines.append(f"   • F1 Score:  {test_metrics.get('eval_f1', 'N/A'):.3f}")
+    summary_lines.append(
+        f"   • Precision: {test_metrics.get('eval_precision', 'N/A'):.3f}"
+    )
+    summary_lines.append(
+        f"   • Recall:    {test_metrics.get('eval_recall', 'N/A'):.3f}"
+    )
+    summary_lines.append("")
+    summary_lines.append("💾 MODEL ARTIFACTS:")
+    summary_lines.append(f"   • Final model saved to: {final_dir}")
+    summary_lines.append(f"   • MLflow experiments:   {mlruns_path}")
+    summary_lines.append("")
+    summary_lines.append("🚀 NEXT STEPS:")
+    summary_lines.append(
+        f"   • View MLflow UI: mlflow ui --backend-store-uri {mlruns_path}"
+    )
+    summary_lines.append(
+        "   • Load model: AutoModelForSequenceClassification.from_pretrained('{}')".format(
+            final_dir
+        )
+    )
+
+    # Create a special log record for highlighting
+    import logging
+
+    record = logging.LogRecord(
+        name=logger.name,
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="\n".join(summary_lines),
+        args=(),
+        exc_info=None,
+    )
+    record.highlight = True
+    logger.handle(record)
 
 
 logger = _get_logger()
@@ -416,7 +544,7 @@ def main(cfg: DictConfig):
         _mlt.autolog()
         autolog_enabled = True
         autolog_flavor = "transformers"
-        logger.info("Enabled mlflow.transformers.autolog()")
+        logger.info("✓ MLflow transformers autolog enabled")
     except Exception:
         try:
             import mlflow.pytorch as _mlp
@@ -424,16 +552,16 @@ def main(cfg: DictConfig):
             _mlp.autolog()
             autolog_enabled = True
             autolog_flavor = "pytorch"
-            logger.info("Enabled mlflow.pytorch.autolog()")
+            logger.info("✓ MLflow pytorch autolog enabled")
         except Exception:
-            logger.info("mlflow autolog not available; using manual logging.")
+            logger.info("ℹ️  MLflow autolog not available; using manual logging")
 
     # Get hydra run directory.
     try:
         # Primary method: get from Hydra's runtime. This is the most reliable way.
         hydra_cfg = HydraConfig.get()
         hydra_run_dir = hydra_cfg.runtime.output_dir
-        logger.info(f"Hydra-managed run directory: {hydra_run_dir}")
+        logger.info(f"📁 Hydra run directory: {hydra_run_dir}")
     except ValueError:
         # Fallback for tests or when running without full Hydra context.
         logger.warning(
@@ -450,7 +578,7 @@ def main(cfg: DictConfig):
 
     out_dir = Path(hydra_run_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"MLflow tracking URI: {mlflow.get_tracking_uri()}")
+    logger.info(f"🔗 MLflow tracking URI: {mlflow.get_tracking_uri()}")
 
     dataset, le = load_processed_dataset(cfg)
     train_ds, val_ds, test_ds = split_dataset(dataset, cfg)
@@ -505,13 +633,38 @@ def main(cfg: DictConfig):
                 }
             )
         else:
-            logger.info(
-                f"Autolog enabled ({autolog_flavor}); skipping manual param logging"
-            )
-        logger.info("Training...")
+            logger.info("✓ Parameters logged to MLflow automatically")
+        logger.info("🚀 Starting training...")
         trainer.train()
-        logger.info("Validation metrics (best model):")
+
+        # Create a section break for evaluation results
+        import logging
+
+        record = logging.LogRecord(
+            name=logger.name,
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="📊 EVALUATION RESULTS",
+            args=(),
+            exc_info=None,
+        )
+        record.section = True
+        logger.handle(record)
+
+        logger.info("🏆 Validation metrics (best model):")
         val_metrics = trainer.evaluate()
+        logger.info(
+            _format_metrics(
+                {
+                    k.replace("eval_", ""): v
+                    for k, v in val_metrics.items()
+                    if k.startswith("eval_")
+                },
+                "Validation Performance",
+            )
+        )
+
         if not autolog_enabled:
             mlflow.log_metrics(
                 {
@@ -521,11 +674,21 @@ def main(cfg: DictConfig):
                 }
             )
         else:
-            logger.info("Autolog enabled; skipping manual val metric logging")
-        logger.info(str(val_metrics))
+            logger.info("✓ Metrics logged to MLflow automatically")
 
-        logger.info("Evaluating on test set...")
+        logger.info("🧪 Evaluating on test set...")
         test_metrics = trainer.evaluate(test_ds)
+        logger.info(
+            _format_metrics(
+                {
+                    k.replace("eval_", ""): v
+                    for k, v in test_metrics.items()
+                    if k.startswith("eval_")
+                },
+                "Test Set Performance",
+            )
+        )
+
         if not autolog_enabled:
             mlflow.log_metrics(
                 {
@@ -535,10 +698,10 @@ def main(cfg: DictConfig):
                 }
             )
         else:
-            logger.info("Autolog enabled; skipping manual test metric logging")
-        logger.info(str(test_metrics))
+            logger.info("✓ Test metrics logged to MLflow automatically")
 
-        # Confusion matrix
+        # Confusion matrix analysis
+        logger.info("📈 Confusion Matrix Analysis:")
         from sklearn.metrics import confusion_matrix
 
         # Trainer.predict in tests may receive a torch.utils.data.Subset which
@@ -557,10 +720,10 @@ def main(cfg: DictConfig):
         preds = getattr(test_output, "predictions", None)
         label_ids = getattr(test_output, "label_ids", None)
         if preds is None:
-            logger.warning("Trainer.predict returned no predictions; using zeros.")
+            logger.warning("⚠️  Trainer.predict returned no predictions; using zeros.")
             preds = np.zeros((len(predict_ds), 1))
         if label_ids is None:
-            logger.warning("Trainer.predict returned no label_ids; using zeros.")
+            logger.warning("⚠️  Trainer.predict returned no label_ids; using zeros.")
             label_ids = np.zeros(len(predict_ds), dtype=int)
         preds = np.argmax(preds, axis=1)
         labels = label_ids
@@ -569,6 +732,10 @@ def main(cfg: DictConfig):
         # of classes (avoids sklearn warning about single-label inputs).
         all_label_indices = list(range(len(le.classes_)))
         cm = confusion_matrix(labels, preds, labels=all_label_indices)
+
+        # Display confusion matrix in console
+        logger.info(_format_confusion_matrix(cm, le.classes_))
+
         # Create evaluation subfolder (cosmetic / organizational); we do not
         # persist the confusion matrix JSON locally to avoid redundant files.
         (out_dir / "evaluation").mkdir(exist_ok=True)
@@ -577,7 +744,7 @@ def main(cfg: DictConfig):
                 {"matrix": cm.tolist(), "labels": le.classes_.tolist()},
                 artifact_file="evaluation/confusion_matrix.json",
             )
-            logger.info("Logged confusion matrix via mlflow.log_dict (no local file)")
+            logger.info("✓ Confusion matrix saved to MLflow")
         except Exception:
             # Fallback: if log_dict unavailable, write temp file and log then remove
             import json
@@ -651,10 +818,9 @@ def main(cfg: DictConfig):
         keep_local = getattr(cfg.hparams, "keep_local_copy", False)
 
         # Final model persistence policy: always save a consolidated copy to
-        # outputs/train_bert/models/finetuned/<timestamp>. This decouples long-term artifact from
+        # outputs/train_bert/final_model. This decouples long-term artifact from
         # the transient hydra run directory.
-        timestamp = Path(hydra_run_dir).name
-        final_dir = project_root / "outputs" / "train_bert" / "models" / "finetuned" / timestamp
+        final_dir = project_root / "outputs" / "train_bert" / "final_model"
         final_dir.mkdir(parents=True, exist_ok=True)
         try:
             trainer.save_model(str(final_dir))
@@ -662,13 +828,13 @@ def main(cfg: DictConfig):
             # Save label encoder
             le_path = final_dir / "label_encoder.joblib"
             joblib.dump(le, le_path)
-            logger.info(
-                f"Saved final model, tokenizer, and label encoder to {final_dir}"
-            )
+            logger.info(f"💾 Final model saved to: {final_dir}")
         except Exception as e:
-            logger.warning(f"Could not save final model copy to {final_dir}: {e}")
+            logger.warning(f"⚠️  Could not save final model copy to {final_dir}: {e}")
 
-        logger.info("Done. Launch MLflow UI with: mlflow ui --backend-store-uri mlruns")
+        # Log comprehensive training summary
+        mlruns_path = str(project_root / "outputs" / "train_bert" / "mlruns")
+        _log_training_summary(cfg, val_metrics, test_metrics, final_dir, mlruns_path)
 
     return 0
 

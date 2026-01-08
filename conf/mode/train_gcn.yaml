@@ -15,6 +15,11 @@ mlflow_experiment_name: "minimal_gcn_training"
 # Override MLflow tracking URI for GCN
 mlflow_tracking_uri: "file:outputs/train_gcn/mlruns"
 
+# Hydra run directory
+hydra:
+  run:
+    dir: outputs/train_gcn/hydra/${now:%Y-%m-%d_%H-%M-%S}
+
 # BERT hyperparameters (needed for BertGCN)
 hparams:
   model_name_or_path: "/prj/doctoral_letters/PETGUI/med_bert_local"

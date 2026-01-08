@@ -34,6 +34,91 @@ from transformers import AutoModel, AutoTokenizer
 from bertgcn.utils import load_corpus
 
 
+def _get_logger():
+    """Get a beautifully formatted logger for GCN training."""
+
+    # Create a custom formatter for better readability
+    class ColoredFormatter(logging.Formatter):
+        def format(self, record):
+            if record.levelno >= logging.ERROR:
+                color = "\033[91m"  # Red
+            elif record.levelno >= logging.WARNING:
+                color = "\033[93m"  # Yellow
+            elif record.levelno >= logging.INFO:
+                color = "\033[92m"  # Green
+            else:
+                color = "\033[0m"  # Reset
+
+            # Add special formatting for key metrics
+            if hasattr(record, "highlight") and record.highlight:
+                return f"\033[1;94m{'='*60}\n{record.getMessage()}\n{'='*60}\033[0m"
+            elif hasattr(record, "section") and record.section:
+                return f"\033[1;96m{'─'*50}\n{record.getMessage()}\n{'─'*50}\033[0m"
+            else:
+                return f"{color}{super().format(record)}\033[0m"
+
+    formatter = ColoredFormatter(
+        fmt="%(asctime)s - %(levelname)s - %(message)s", datefmt="%H:%M:%S"
+    )
+
+    logger = logging.getLogger("train_gcn")
+    logger.setLevel(logging.INFO)
+
+    # Remove any existing handlers
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+
+    # Add console handler with colored formatting
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    return logger
+
+
+def _format_metrics_gcn(epoch, loss, train_acc, val_acc, max_epochs):
+    """Format GCN training metrics into a clean display."""
+    progress = f"Epoch {epoch+1}/{max_epochs}"
+    metrics = ".4f"
+    return f"{progress} | {metrics}"
+
+
+def _log_gcn_training_summary(test_acc, final_dir, mlruns_path):
+    """Log a comprehensive GCN training summary."""
+    summary_lines = []
+    summary_lines.append("🎯 GCN TRAINING COMPLETED SUCCESSFULLY")
+    summary_lines.append("")
+    summary_lines.append("📊 FINAL TEST PERFORMANCE:")
+    summary_lines.append(f"   • Test Accuracy: {test_acc:.1%}")
+    summary_lines.append("")
+    summary_lines.append("💾 MODEL ARTIFACTS:")
+    summary_lines.append(f"   • Final model saved to: {final_dir}")
+    summary_lines.append(f"   • MLflow experiments:   {mlruns_path}")
+    summary_lines.append("")
+    summary_lines.append("🚀 NEXT STEPS:")
+    summary_lines.append(
+        f"   • View MLflow UI: mlflow ui --backend-store-uri {mlruns_path}"
+    )
+    summary_lines.append(
+        "   • Load model: BertGCN.from_pretrained() with saved state_dict"
+    )
+
+    # Create a special log record for highlighting
+    import logging
+
+    record = logging.LogRecord(
+        name=logger.name,
+        level=logging.INFO,
+        pathname="",
+        lineno=0,
+        msg="\n".join(summary_lines),
+        args=(),
+        exc_info=None,
+    )
+    record.highlight = True
+    logger.handle(record)
+
+
 class SimpleGCN(nn.Module):
     """Simple 2-layer GCN for node classification using PyTorch Geometric."""
 
@@ -425,19 +510,16 @@ def evaluate(
 @hydra.main(version_base=None, config_path="../conf", config_name="mode/train_gcn")
 def main(cfg: DictConfig) -> float:
     """Main training function."""
-    # Setup logging
-    from .logging_config import setup_logging
+    # Setup improved logging
+    logger = _get_logger()
 
-    setup_logging()
-    logger = logging.getLogger(__name__)
-
-    logger.info("Starting Minimal GCN Training")
-    logger.info(f"Configuration: {OmegaConf.to_yaml(cfg)}")
+    logger.info("🚀 Starting BertGCN Training")
+    logger.info(f"📋 Configuration loaded from: {cfg.__class__.__module__}")
 
     # Handle dev mode: limit to 1 epoch for quick testing
     if cfg.get("dev", False):
         cfg.training.epochs = 1
-        logger.info("Dev mode enabled: limiting to 1 epoch")
+        logger.info("⚡ Dev mode enabled: limiting to 1 epoch")
 
     # Set random seeds
     random.seed(cfg.seed)
@@ -446,7 +528,7 @@ def main(cfg: DictConfig) -> float:
 
     # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Using device: {device}")
+    logger.info(f"🖥️  Using device: {device}")
 
     # Setup MLflow
     mlflow.set_experiment(cfg.mlflow_experiment_name)
@@ -513,6 +595,7 @@ def main(cfg: DictConfig) -> float:
         test_loader = DataLoader(TensorDataset(test_indices), batch_size=64)
 
         # Training loop
+        logger.info("🏃 Starting training loop...")
         for epoch in range(cfg.training.epochs):
             model.train()
             epoch_loss = 0.0
@@ -542,8 +625,9 @@ def main(cfg: DictConfig) -> float:
             )
 
             logger.info(
-                f"Epoch {epoch+1}/{cfg.training.epochs} - "
-                f"Loss: {epoch_loss:.4f}, Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}"
+                _format_metrics_gcn(
+                    epoch, epoch_loss, train_acc, val_acc, cfg.training.epochs
+                )
             )
 
             scheduler.step()
@@ -551,20 +635,30 @@ def main(cfg: DictConfig) -> float:
             # Update features for next epoch
             data = update_features(cfg.hparams.model_name_or_path, data, device)
 
-            # Save best model (removed, save only final)
+        # Create a section break for final evaluation
+        import logging as log_module
+
+        record = log_module.LogRecord(
+            name=logger.name,
+            level=log_module.INFO,
+            pathname="",
+            lineno=0,
+            msg="📊 FINAL EVALUATION RESULTS",
+            args=(),
+            exc_info=None,
+        )
+        record.section = True
+        logger.handle(record)
 
         # Final evaluation
         test_acc = evaluate(model, data, data["test_mask"], device)
         mlflow.log_metric("test_acc", test_acc)
 
-        logger.info(f"Final Test Accuracy: {test_acc:.4f}")
-        logger.info("Training completed!")
+        logger.info(f"🎯 Final Test Accuracy: {test_acc:.1%}")
+        logger.info("✅ Training completed successfully!")
 
         # Save final model hierarchically
-        import os
-        from pathlib import Path
-
-        final_model_dir = Path("outputs/train_gcn/models/final_model")
+        final_model_dir = Path("outputs/train_gcn/final_model")
         final_model_dir.mkdir(parents=True, exist_ok=True)
 
         # Save model state dict
@@ -608,8 +702,12 @@ def main(cfg: DictConfig) -> float:
 
             pickle.dump(training_args, f)
 
-        logger.info(f"Saved final model to {final_model_dir}")
+        logger.info(f"💾 Final BertGCN model saved to: {final_model_dir}")
         mlflow.log_artifact(str(final_model_dir), artifact_path="final_model")
+
+        # Log comprehensive training summary
+        mlruns_path = str(project_root / "outputs" / "train_gcn" / "mlruns")
+        _log_gcn_training_summary(test_acc, final_model_dir, mlruns_path)
 
         return test_acc
 
