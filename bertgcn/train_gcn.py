@@ -9,6 +9,12 @@ Educational example demonstrating:
 This version uses the same processed dataset as finetune_bert.py
 """
 
+# Suppress all warnings and logging messages
+import warnings
+warnings.simplefilter("ignore")
+import logging
+logging.getLogger().setLevel(logging.ERROR)
+
 import logging
 import random
 import warnings
@@ -33,9 +39,6 @@ from torch_geometric.utils import dense_to_sparse
 from transformers import AutoModel, AutoTokenizer
 
 from bertgcn.utils import load_corpus
-
-# Suppress BERT pooler warnings that are not relevant for BertGCN
-warnings.simplefilter("ignore")
 
 
 def _get_logger():
