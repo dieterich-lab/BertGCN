@@ -82,6 +82,9 @@ def _get_logger():
     logger = logging.getLogger("train_gcn")
     logger.setLevel(logging.INFO)
 
+    # Avoid duplicate entries from parent/root handlers (Hydra config can attach its own).
+    logger.propagate = False
+
     # Remove any existing handlers
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
@@ -101,7 +104,7 @@ def _format_metrics_gcn(epoch, loss, train_acc, val_acc, max_epochs):
     return f"{progress} | {metrics}"
 
 
-def _log_gcn_training_summary(test_acc, final_dir, mlruns_path):
+def _log_gcn_training_summary(test_acc, final_dir, mlruns_path, logger):
     """Log a comprehensive GCN training summary."""
     summary_lines = []
     summary_lines.append("🎯 GCN TRAINING COMPLETED SUCCESSFULLY")
@@ -562,15 +565,22 @@ def main(cfg: DictConfig) -> float:
     random.seed(cfg.seed)
     np.random.seed(cfg.seed)
     torch.manual_seed(cfg.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(cfg.seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
 
     # Setup device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"🖥️  Using device: {device}")
 
-    # Setup MLflow to write inside outputs/train_gcn
-    if cfg.get("mlflow_tracking_uri"):
-        mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
+    # Setup MLflow to write inside outputs/train_gcn (default if unset)
+    default_mlflow_uri = f"file:{project_root / 'outputs' / 'train_gcn' / 'mlruns'}"
+    tracking_uri = cfg.get("mlflow_tracking_uri") or default_mlflow_uri
+    Path(tracking_uri.replace("file:", "")).mkdir(parents=True, exist_ok=True)
+    mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(cfg.mlflow_experiment_name)
+    mlflow.log_system_metrics(True)
     with mlflow.start_run():
         # Log parameters
         mlflow.log_params(OmegaConf.to_container(cfg, resolve=True))
@@ -637,20 +647,20 @@ def main(cfg: DictConfig) -> float:
         checkpoint_dir = Path("outputs/train_gcn/checkpoints")
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        # Check for latest checkpoint to resume
-        checkpoints = list(checkpoint_dir.glob("checkpoint_epoch_*.pt"))
+        best_val_acc = 0.0
         start_epoch = 0
-        if checkpoints:
-            latest_checkpoint = max(
-                checkpoints, key=lambda x: int(x.stem.split("_")[-1])
-            )
-            checkpoint = torch.load(latest_checkpoint, map_location=device)
+        best_checkpoint = checkpoint_dir / "best_checkpoint.pt"
+
+        # Resume from latest checkpoint if present
+        if best_checkpoint.exists():
+            checkpoint = torch.load(best_checkpoint, map_location=device)
             model.load_state_dict(checkpoint["model_state_dict"])
             optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
             scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-            start_epoch = checkpoint["epoch"]
+            start_epoch = checkpoint.get("epoch", 0)
+            best_val_acc = checkpoint.get("best_val_acc", 0.0)
             logger.info(
-                f"📂 Resumed from checkpoint: {latest_checkpoint} at epoch {start_epoch}"
+                f"📂 Resumed from checkpoint: {best_checkpoint} at epoch {start_epoch}"
             )
 
         # Training loop
@@ -660,7 +670,6 @@ def main(cfg: DictConfig) -> float:
             epoch_loss = 0.0
             for batch in train_loader:
                 indices = batch[0]
-                # Forward
                 out = model(
                     data["features"],
                     data["edge_index"],
@@ -673,13 +682,24 @@ def main(cfg: DictConfig) -> float:
                 epoch_loss += loss.item()
             epoch_loss /= len(train_loader)
 
-            # Evaluate
+            scheduler.step()
+
+            # Update features before evaluation (matches original behavior)
+            data = update_features(cfg.hparams.model_name_or_path, data, device)
+            torch.cuda.empty_cache()
+
+            # Evaluate on train/val/test
             train_acc = evaluate(model, data, data["train_mask"], device)
             val_acc = evaluate(model, data, data["val_mask"], device)
+            test_acc = evaluate(model, data, data["test_mask"], device)
 
-            # Log metrics
             mlflow.log_metrics(
-                {"train_loss": epoch_loss, "train_acc": train_acc, "val_acc": val_acc},
+                {
+                    "train_loss": epoch_loss,
+                    "train_acc": train_acc,
+                    "val_acc": val_acc,
+                    "test_acc": test_acc,
+                },
                 step=epoch,
             )
 
@@ -689,11 +709,9 @@ def main(cfg: DictConfig) -> float:
                 )
             )
 
-            scheduler.step()
-
-            # Save checkpoint every 10 epochs or at the end
-            if (epoch + 1) % 10 == 0 or epoch == cfg.training.epochs - 1:
-                checkpoint_path = checkpoint_dir / f"checkpoint_epoch_{epoch+1}.pt"
+            # Best-checkpoint on validation accuracy
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
                 torch.save(
                     {
                         "epoch": epoch + 1,
@@ -701,15 +719,27 @@ def main(cfg: DictConfig) -> float:
                         "optimizer_state_dict": optimizer.state_dict(),
                         "scheduler_state_dict": scheduler.state_dict(),
                         "loss": epoch_loss,
+                        "best_val_acc": best_val_acc,
                     },
-                    checkpoint_path,
+                    best_checkpoint,
                 )
                 logger.info(
-                    f"💾 Checkpoint saved at epoch {epoch+1}: {checkpoint_path}"
+                    f"💾 New best checkpoint (val_acc={best_val_acc:.4f}) at epoch {epoch+1}: {best_checkpoint}"
                 )
 
-            # Update features for next epoch
-            data = update_features(cfg.hparams.model_name_or_path, data, device)
+        # Load best checkpoint (val accuracy) before final test
+        if best_checkpoint.exists():
+            checkpoint = torch.load(best_checkpoint, map_location=device)
+            model.load_state_dict(checkpoint["model_state_dict"])
+            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            logger.info(
+                f"📂 Loaded best checkpoint for final eval (val_acc={checkpoint.get('best_val_acc', 0):.4f})"
+            )
+
+        # Recompute features once more with the best model before test
+        data = update_features(cfg.hparams.model_name_or_path, data, device)
+        torch.cuda.empty_cache()
 
         # Create a section break for final evaluation
         import logging as log_module
@@ -783,7 +813,7 @@ def main(cfg: DictConfig) -> float:
 
         # Log comprehensive training summary
         mlruns_path = str(project_root / "outputs" / "train_gcn" / "mlruns")
-        _log_gcn_training_summary(test_acc, final_model_dir, mlruns_path)
+        _log_gcn_training_summary(test_acc, final_model_dir, mlruns_path, logger)
 
         return test_acc
 
