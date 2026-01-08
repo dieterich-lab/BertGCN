@@ -173,10 +173,42 @@ poetry run bertgcn finetune --config-path experiments/my_experiment
 
 ## 📂 Output Directory Structure
 
-Outputs are organized under configured paths:
+All outputs are organized under the `outputs/` directory with mode-specific subfolders:
 
 ```
-models/
+outputs/
+├── train_bert/              # BERT fine-tuning outputs
+│   ├── hydra/               # Hydra run directories (one per run)
+│   │   └── <timestamp>/     # e.g., 2025-08-28_12-39-43/
+│   │       ├── config.yaml  # Resolved configuration
+│   │       ├── overrides.yaml
+│   │       └── .hydra/
+│   └── mlruns/              # MLflow tracking data for BERT runs
+│       └── <experiment_id>/ # e.g., 142214766644063952/
+│           ├── <run_id>/    # Individual run data
+│           │   ├── metrics/
+│           │   ├── params/
+│           │   ├── tags/
+│           │   ├── artifacts/
+│           │   └── meta.yaml
+│           └── meta.yaml
+└── train_gcn/               # BertGCN training outputs
+    ├── hydra/               # Hydra run directories (one per run)
+    │   └── <timestamp>/     # e.g., 2025-08-29_00-08-27/
+    │       ├── config.yaml  # Resolved configuration
+    │       ├── overrides.yaml
+    │       └── .hydra/
+    └── mlruns/              # MLflow tracking data for GCN runs
+        └── <experiment_id>/ # e.g., 273766186618787412/
+            ├── <run_id>/    # Individual run data
+            │   ├── metrics/
+            │   ├── params/
+            │   ├── tags/
+            │   ├── artifacts/
+            │   └── meta.yaml
+            └── meta.yaml
+
+models/                      # Final trained models (legacy location)
 ├── finetuned/               # BERT fine-tuning results
 │   └── <timestamp>/
 │       ├── pytorch_model.bin
@@ -186,21 +218,13 @@ models/
     ├── model.pt
     └── config.json
 
-data/
+data/                        # Processed data and graphs
 ├── processed/
 │   ├── tokenized_dataset/
 │   ├── label_encoder.joblib
 │   └── meds_label_encoder.joblib
-└── ind.*                    # Graph components
-
-outputs/                     # Hydra run directories
-├── train_bert/
-└── train_gcn/
-
-mlruns/                      # MLflow tracking data
+└── ind.*                    # Graph components (PMI/TF-IDF edges)
 ```
-
-Each mode writes logs and artifacts to organized subdirectories.
 
 ### Artifact Contents
 
@@ -214,13 +238,17 @@ Each mode writes logs and artifacts to organized subdirectories.
 
 ## 📈 MLflow Tracking
 
-Enabled by default for experiment tracking:
+MLflow tracking is enabled by default and writes to mode-specific directories under `outputs/`:
 
 ```bash
-poetry run mlflow ui --backend-store-uri mlruns
+# View BERT fine-tuning experiments
+poetry run mlflow ui --backend-store-uri outputs/train_bert/mlruns
+
+# View BertGCN training experiments  
+poetry run mlflow ui --backend-store-uri outputs/train_gcn/mlruns
 ```
 
-Tracks parameters, metrics, and artifacts automatically.
+Tracks parameters, metrics, and artifacts automatically for each run.
 
 ---
 
