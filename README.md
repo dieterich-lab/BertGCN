@@ -252,6 +252,31 @@ Tracks parameters, metrics, and artifacts automatically for each run.
 
 ---
 
+## 🧭 Document-Level Interpretability (New)
+
+We provide three complementary approaches to explain a document's prediction by
+highlighting influential *documents* (precedents) rather than only token
+importance.
+
+- **A. Neighbor scoring (edge-weighted GCN probs):**
+  - Script: `poetry run python -m bertgcn.interpret_docs`
+  - Idea: For a target doc, rank neighbors by `edge_weight * P(pred_class | neighbor)`.
+  - Output: `outputs/train_gcn/interpret/document_influence.csv` with `top_neighbors` and `neighbor_scores`.
+
+- **B. Integrated Gradients over document features:**
+  - Script: `poetry run python -m bertgcn.interpret_docs_ig`
+  - Idea: IG on the full feature matrix; aggregate attributions per document and rank.
+  - Output: `outputs/train_gcn/interpret/document_influence_ig.csv`.
+
+- **C. SHAP-style neighbor perturbation (leave-one-out):**
+  - Script: `poetry run python -m bertgcn.interpret_docs_shap`
+  - Idea: For each neighbor, drop its edge and measure the drop in target prob (SHAP-like delta).
+  - Output: `outputs/train_gcn/interpret/document_influence_shap.csv`.
+
+**Config knobs (Hydra via mode/train_gcn):** `interpretation.top_k` (default 5), `interpretation.max_docs` (optional) and `hparams.model_name_or_path`, `gcn.*` as usual. Models are loaded from `outputs/train_gcn/final_model/pytorch_model.bin` when present.
+
+---
+
 ## 🧪 Testing
 
 Run tests with:
