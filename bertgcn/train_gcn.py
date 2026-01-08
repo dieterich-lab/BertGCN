@@ -34,16 +34,15 @@ from transformers import AutoModel, AutoTokenizer
 
 from bertgcn.utils import load_corpus
 
-
 # Suppress BERT pooler warnings that are not relevant for BertGCN
 warnings.filterwarnings(
     "ignore",
-    message="Some weights of BertModel were not initialized from the model checkpoint",
+    message=r".*Some weights of BertModel were not initialized.*",
     category=UserWarning,
 )
 warnings.filterwarnings(
     "ignore",
-    message="You should probably TRAIN this model on a down-stream task",
+    message=r".*You should probably TRAIN this model on a down-stream task.*",
     category=UserWarning,
 )
 
@@ -93,7 +92,7 @@ def _get_logger():
 def _format_metrics_gcn(epoch, loss, train_acc, val_acc, max_epochs):
     """Format GCN training metrics into a clean display."""
     progress = f"Epoch {epoch+1}/{max_epochs}"
-    metrics = ".4f"
+    metrics = f"Loss: {loss:.4f} | Train Acc: {train_acc:.4f} | Val Acc: {val_acc:.4f}"
     return f"{progress} | {metrics}"
 
 
