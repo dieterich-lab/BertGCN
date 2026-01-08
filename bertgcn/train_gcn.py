@@ -419,7 +419,12 @@ def update_features(
     print("Starting update_features", flush=True)
     from transformers import AutoModel
 
-    bert_model = AutoModel.from_pretrained(model_name).to(device)
+    # Temporarily disable logging warnings
+    logging.disable(logging.WARNING)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        bert_model = AutoModel.from_pretrained(model_name).to(device)
+    logging.disable(logging.NOTSET)
     bert_model.eval()
     doc_mask = data["train_mask"] | data["val_mask"] | data["test_mask"]
     doc_indices = torch.where(doc_mask)[0]
