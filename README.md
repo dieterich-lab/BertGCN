@@ -1,4 +1,6 @@
-# BertGCN
+# BertGCN: BERT-based Graph Convolutional Network with Document-Level Interpretability for Precedents Detection
+
+**Major Extension:** BertGCN now includes advanced document-level interpretability capabilities, enabling the identification of influential documents (precedents) that contribute to a model's predictions. This opens up a wide range of use cases in explainable AI, legal analysis, medical diagnostics, and any domain requiring transparent document classification with precedent-based reasoning.
 
 A BERT-based Graph Convolutional Network for document classification, combining the strengths of transformer-based language models with graph neural networks for enhanced text understanding.
 
@@ -252,11 +254,16 @@ Tracks parameters, metrics, and artifacts automatically for each run.
 
 ---
 
-## 🧭 Document-Level Interpretability (New)
+## 🧭 Document-Level Interpretability for Precedents Detection (Major Extension)
 
-Three complementary ways to explain a document's prediction by citing
-influential *documents* (precedents). All assume a trained BertGCN and the
-graph with edge weights.
+**Revolutionary Feature:** BertGCN introduces groundbreaking document-level interpretability, allowing users to explain predictions by identifying influential documents (precedents) that shaped the model's decision. This transforms opaque black-box models into transparent, precedent-aware systems, enabling:
+
+- **Legal Analysis:** Identify case precedents influencing judicial decisions.
+- **Medical Diagnostics:** Highlight similar patient records affecting diagnoses.
+- **Regulatory Compliance:** Trace decision influences for auditing and transparency.
+- **Research & Education:** Understand model reasoning for scientific insights.
+
+Three complementary approaches explain a document's prediction by citing influential *documents* (precedents). All assume a trained BertGCN and the graph with edge weights.
 
 - **A. Neighbor scoring (fast, edge-weighted GCN probs)**
   - Script: `poetry run python -m bertgcn.interpret_docs_neighbors`
