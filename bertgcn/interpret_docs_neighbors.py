@@ -7,7 +7,7 @@ where P_c(j) is the GCN class probability of neighbor j. We rank neighbors by
 this score and return top-k influential documents.
 
 Run:
-    poetry run python -m bertgcn.interpret_docs
+    poetry run python -m bertgcn.interpret_docs_neighbors
 Output:
     outputs/train_gcn/interpret/document_influence.csv
 """
@@ -18,7 +18,7 @@ from typing import Dict, List, Tuple
 import hydra
 import torch
 from hydra.utils import get_original_cwd
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig
 
 from bertgcn.train_gcn import BertGCN, load_graph_data_from_disk, load_processed_dataset
 

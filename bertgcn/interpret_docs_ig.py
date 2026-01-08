@@ -21,11 +21,7 @@ import torch
 from hydra.utils import get_original_cwd
 from omegaconf import DictConfig
 
-from bertgcn.train_gcn import (
-    BertGCN,
-    load_graph_data_from_disk,
-    load_processed_dataset,
-)
+from bertgcn.train_gcn import BertGCN, load_graph_data_from_disk, load_processed_dataset
 
 
 def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
@@ -38,7 +34,9 @@ def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
         dropout=cfg.gcn.dropout,
     )
     project_root = Path(get_original_cwd())
-    ckpt_path = project_root / "outputs" / "train_gcn" / "final_model" / "pytorch_model.bin"
+    ckpt_path = (
+        project_root / "outputs" / "train_gcn" / "final_model" / "pytorch_model.bin"
+    )
     if ckpt_path.exists():
         state = torch.load(ckpt_path, map_location="cpu")
         model.load_state_dict(state, strict=False)
@@ -87,14 +85,20 @@ def run_document_ig(cfg: DictConfig):
     data = load_graph_data_from_disk(cfg)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    data = {k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in data.items()}
+    data = {
+        k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in data.items()
+    }
 
     # Model
-    model = _load_model(cfg, n_classes=n_classes, n_features=data["features"].shape[1]).to(device)
+    model = _load_model(
+        cfg, n_classes=n_classes, n_features=data["features"].shape[1]
+    ).to(device)
 
     # Predictions
     with torch.no_grad():
-        log_probs = model.gcn(data["features"], data["edge_index"], data.get("edge_weight"))
+        log_probs = model.gcn(
+            data["features"], data["edge_index"], data.get("edge_weight")
+        )
         probs = torch.exp(log_probs)
         pred_class = probs.argmax(dim=1)
 

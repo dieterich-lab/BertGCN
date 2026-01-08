@@ -259,7 +259,7 @@ influential *documents* (precedents). All assume a trained BertGCN and the
 graph with edge weights.
 
 - **A. Neighbor scoring (fast, edge-weighted GCN probs)**
-  - Script: `poetry run python -m bertgcn.interpret_docs`
+  - Script: `poetry run python -m bertgcn.interpret_docs_neighbors`
   - How it works: For a target doc *t* with predicted class *c*, each incoming
     neighbor *j* gets a score `edge_weight(j→t) * P_c(j)` using the GCN class
     probability of *j*. Top-k neighbors are returned.
