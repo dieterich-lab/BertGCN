@@ -545,6 +545,8 @@ def main(cfg: DictConfig) -> float:
     # Setup improved logging
     logger = _get_logger()
 
+    project_root = Path(get_original_cwd())
+
     logger.info("🚀 Starting BertGCN Training")
     logger.info(f"📋 Configuration loaded from: {cfg.__class__.__module__}")
 
