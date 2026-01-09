@@ -427,45 +427,28 @@ def update_feature(model, data, device):
 
 
 def update_features(
-    model_name: str, data: Dict[str, torch.Tensor], device: torch.device
+    model: BertGCN, data: Dict[str, torch.Tensor], device: torch.device
 ):
-    """Update document features using BERT."""
+    """Update document features using the current BERT encoder (no gradients)."""
     print("Starting update_features", flush=True)
-    import os
 
-    from transformers import AutoModel
-
-    # Temporarily redirect stdout and stderr to suppress warnings
-    stdout_fd = os.dup(1)
-    stderr_fd = os.dup(2)
-    with open(os.devnull, "w") as devnull:
-        os.dup2(devnull.fileno(), 1)
-        os.dup2(devnull.fileno(), 2)
-        try:
-            bert_model = AutoModel.from_pretrained(model_name).to(device)
-        finally:
-            os.dup2(stdout_fd, 1)
-            os.dup2(stderr_fd, 2)
-            os.close(stdout_fd)
-            os.close(stderr_fd)
-    bert_model.eval()
+    model.eval()
     doc_mask = data["train_mask"] | data["val_mask"] | data["test_mask"]
     doc_indices = torch.where(doc_mask)[0]
+
     batch_size = 64  # Larger batch for speed
     cls_list = []
-    for i in range(0, len(doc_indices), batch_size):
-        batch_indices = doc_indices[i : i + batch_size]
-        batch_input_ids = data["input_ids"][batch_indices]
-        batch_attention_mask = data["attention_mask"][batch_indices]
-        with torch.no_grad():
-            batch_cls = bert_model(
+    with torch.no_grad():
+        for i in range(0, len(doc_indices), batch_size):
+            batch_indices = doc_indices[i : i + batch_size]
+            batch_input_ids = data["input_ids"][batch_indices]
+            batch_attention_mask = data["attention_mask"][batch_indices]
+            batch_cls = model.bert_model(
                 input_ids=batch_input_ids, attention_mask=batch_attention_mask
             )[0][:, 0]
-        cls_list.append(batch_cls)
+            cls_list.append(batch_cls)
+
     cls_feats = torch.cat(cls_list, dim=0)
-    data["features"][doc_mask] = cls_feats
-    print("update_features done", flush=True)
-    return data
     data["features"][doc_mask] = cls_feats
     print("update_features done", flush=True)
     return data
@@ -609,23 +592,25 @@ def main(cfg: DictConfig) -> float:
 
         model = model.to(device)
 
-        # Setup optimizer and loss
+        # Setup optimizer, weight decay, and loss
         bert_lr = cfg.training.bert_lr
         gcn_lr = cfg.training.lr
+        weight_decay = getattr(cfg.training, "weight_decay", 1e-2)
         optimizer = torch.optim.Adam(
             [
                 {"params": model.bert_model.parameters(), "lr": bert_lr},
                 {"params": model.classifier.parameters(), "lr": bert_lr},
                 {"params": model.gcn.parameters(), "lr": gcn_lr},
-            ]
+            ],
+            weight_decay=weight_decay,
         )
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(
-            optimizer, milestones=[30], gamma=0.1
-        )
+
+        # Scheduler is initialized after data loaders are built
+        scheduler = None
         criterion = torch.nn.NLLLoss()
 
-        # Update features once with BERT
-        data = update_features(cfg.hparams.model_name_or_path, data, device)
+        # Update features once with BERT (uses the current model)
+        data = update_features(model, data, device)
 
         # Create data loaders
         from torch.utils.data import DataLoader, TensorDataset
@@ -638,6 +623,21 @@ def main(cfg: DictConfig) -> float:
         )
         val_loader = DataLoader(TensorDataset(val_indices), batch_size=64)
         test_loader = DataLoader(TensorDataset(test_indices), batch_size=64)
+
+        # Warmup + linear decay scheduler (per-step) for stability
+        total_steps = cfg.training.epochs * max(1, len(train_loader))
+        warmup_steps = max(1, int(0.05 * total_steps))
+
+        def lr_lambda(current_step: int):
+            if current_step < warmup_steps:
+                return float(current_step) / float(max(1, warmup_steps))
+            return max(
+                0.0,
+                float(total_steps - current_step)
+                / float(max(1, total_steps - warmup_steps)),
+            )
+
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
         # Setup checkpoint directory
         checkpoint_dir = Path("outputs/train_gcn/checkpoints")
@@ -675,29 +675,40 @@ def main(cfg: DictConfig) -> float:
         for epoch in range(start_epoch, cfg.training.epochs):
             model.train()
             epoch_loss = 0.0
+            nan_flag = False
             for batch in train_loader:
                 indices = batch[0]
+                input_ids_batch = data["input_ids"][indices]
+                attention_mask_batch = data["attention_mask"][indices]
                 out = model(
                     data["features"],
                     data["edge_index"],
                     data["edge_weight"],
+                    input_ids_batch,
+                    attention_mask_batch,
+                    indices,
                 )
-                loss = criterion(out[indices], data["labels"][indices])
+                loss = criterion(out, data["labels"][indices])
+
+                if torch.isnan(loss):
+                    logger.error("NaN loss encountered; stopping training early.")
+                    nan_flag = True
+                    break
+
                 optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
+                scheduler.step()
                 epoch_loss += loss.item()
-            epoch_loss /= len(train_loader)
 
-            if torch.isnan(torch.tensor(epoch_loss)):
-                logger.error("NaN loss encountered; stopping training early.")
+            if nan_flag:
                 break
 
-            scheduler.step()
+            epoch_loss /= len(train_loader)
 
             # Update features before evaluation (matches original behavior)
-            data = update_features(cfg.hparams.model_name_or_path, data, device)
+            data = update_features(model, data, device)
             torch.cuda.empty_cache()
 
             # Evaluate on train/val and track validation loss
