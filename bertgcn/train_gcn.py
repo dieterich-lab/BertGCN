@@ -685,9 +685,14 @@ def main(cfg: DictConfig) -> float:
                 loss = criterion(out[indices], data["labels"][indices])
                 optimizer.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
                 optimizer.step()
                 epoch_loss += loss.item()
             epoch_loss /= len(train_loader)
+
+            if torch.isnan(torch.tensor(epoch_loss)):
+                logger.error("NaN loss encountered; stopping training early.")
+                break
 
             scheduler.step()
 
