@@ -49,3 +49,4 @@ training:
   lr: 0.001
   bert_lr: 0.00001
   epochs: 50
+  resume: false

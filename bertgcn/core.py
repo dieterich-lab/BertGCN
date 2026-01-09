@@ -29,7 +29,8 @@ def setup_environment(seed: int = DEFAULT_SEED) -> None:
     warnings.filterwarnings("ignore", category=DeprecationWarning)
     warnings.simplefilter(action="ignore", category=FutureWarning)
 
-    # Set random seeds for reproducibility
+    # Set random seeds for reproducibility (force plain int to avoid type issues)
+    seed = int(seed)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)

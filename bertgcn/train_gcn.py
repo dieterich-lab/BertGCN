@@ -482,25 +482,20 @@ def train_epoch(
     model.train()
     optimizer.zero_grad()
 
-    # For training, pass inputs for BERT prediction on documents
-    doc_mask = data["train_mask"] | data["val_mask"] | data["test_mask"]
-    input_ids = data["input_ids"][doc_mask].to(device) if "input_ids" in data else None
-    attention_mask = (
-        data["attention_mask"][doc_mask].to(device)
-        if "attention_mask" in data
-        else None
-    )
+    # For training, only optimize on train documents
+    train_indices = torch.where(data["train_mask"])[0]
+    input_ids = data["input_ids"][train_indices].to(device)
+    attention_mask = data["attention_mask"][train_indices].to(device)
 
-    # Call model with appropriate arguments
     out = model(
         data["features"].to(device),
-        data["adj"].to(device),
+        data["edge_index"].to(device),
+        data["edge_weight"].to(device),
         input_ids,
         attention_mask,
+        train_indices,
     )
-    loss = criterion(
-        out[data["train_mask"]], data["labels"][data["train_mask"]].to(device)
-    )
+    loss = criterion(out, data["labels"][train_indices].to(device))
 
     loss.backward()
     optimizer.step()
@@ -580,7 +575,8 @@ def main(cfg: DictConfig) -> float:
     Path(tracking_uri.replace("file:", "")).mkdir(parents=True, exist_ok=True)
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(cfg.mlflow_experiment_name)
-    mlflow.log_system_metrics(True)
+    if hasattr(mlflow, "log_system_metrics"):
+        mlflow.log_system_metrics(True)
     with mlflow.start_run():
         # Log parameters
         mlflow.log_params(OmegaConf.to_container(cfg, resolve=True))
@@ -651,17 +647,28 @@ def main(cfg: DictConfig) -> float:
         start_epoch = 0
         best_checkpoint = checkpoint_dir / "best_checkpoint.pt"
 
-        # Resume from latest checkpoint if present
+        # Controlled resume behavior (default: fresh start)
+        resume_requested = bool(
+            getattr(cfg.training, "resume", False)
+            or getattr(cfg.training, "resume_from_checkpoint", False)
+        )
+
         if best_checkpoint.exists():
-            checkpoint = torch.load(best_checkpoint, map_location=device)
-            model.load_state_dict(checkpoint["model_state_dict"])
-            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-            start_epoch = checkpoint.get("epoch", 0)
-            best_val_acc = checkpoint.get("best_val_acc", 0.0)
-            logger.info(
-                f"📂 Resumed from checkpoint: {best_checkpoint} at epoch {start_epoch}"
-            )
+            if resume_requested:
+                checkpoint = torch.load(best_checkpoint, map_location=device)
+                model.load_state_dict(checkpoint["model_state_dict"])
+                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+                scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+                start_epoch = checkpoint.get("epoch", 0)
+                best_val_acc = checkpoint.get("best_val_acc", 0.0)
+                logger.info(
+                    f"📂 Resumed from checkpoint: {best_checkpoint} at epoch {start_epoch}"
+                )
+            else:
+                best_checkpoint.unlink()
+                logger.info(
+                    "🧹 Removed existing checkpoint to start a fresh run (resume disabled)."
+                )
 
         # Training loop
         logger.info("🏃 Starting training loop...")
@@ -688,17 +695,39 @@ def main(cfg: DictConfig) -> float:
             data = update_features(cfg.hparams.model_name_or_path, data, device)
             torch.cuda.empty_cache()
 
-            # Evaluate on train/val/test
+            # Evaluate on train/val and track validation loss
             train_acc = evaluate(model, data, data["train_mask"], device)
             val_acc = evaluate(model, data, data["val_mask"], device)
-            test_acc = evaluate(model, data, data["test_mask"], device)
+
+            # Compute validation loss without touching the test split
+            val_indices = torch.where(data["val_mask"])[0]
+            val_loss = 0.0
+            batch_size = 64
+            model.eval()
+            with torch.no_grad():
+                for i in range(0, len(val_indices), batch_size):
+                    batch_indices = val_indices[i : i + batch_size]
+                    input_ids_batch = data["input_ids"][batch_indices]
+                    attention_mask_batch = data["attention_mask"][batch_indices]
+                    logits = model(
+                        data["features"],
+                        data["edge_index"],
+                        data["edge_weight"],
+                        input_ids_batch,
+                        attention_mask_batch,
+                        batch_indices,
+                    )
+                    val_loss += criterion(
+                        logits, data["labels"][batch_indices]
+                    ).item() * len(batch_indices)
+            val_loss /= max(1, len(val_indices))
 
             mlflow.log_metrics(
                 {
                     "train_loss": epoch_loss,
                     "train_acc": train_acc,
                     "val_acc": val_acc,
-                    "test_acc": test_acc,
+                    "val_loss": val_loss,
                 },
                 step=epoch,
             )

@@ -424,17 +424,18 @@ def test_graph_node_indexing(sample_clinic_dataset):
         test_indices = list(range(len(dataset)))
 
         # Calculate document-word frequencies
-        doc_word_freq = graph_builder.calculate_doc_word_freq(test_indices)
+        doc_id_map = {doc_id: new_id for new_id, doc_id in enumerate(test_indices)}
+        doc_word_freq = graph_builder.calculate_doc_word_freq(test_indices, doc_id_map)
 
-        # Setup datasets_info with proper offsets
-        train_size = len(train_dataset)
+        # Setup datasets_info in split order (single split here)
+        total_docs = len(test_indices)
         datasets_info = [
-            (test_indices, 0, "test"),  # Use a simple offset for testing
+            (test_indices, "test"),
         ]
 
         # Call TF-IDF edge calculation
         row, col, weight = graph_builder.calculate_tfidf_edges(
-            doc_word_freq, datasets_info, train_size, [], [], []
+            doc_word_freq, datasets_info, total_docs, [], [], [], doc_id_map
         )
 
         # Check that all node IDs are valid
@@ -451,10 +452,10 @@ def test_graph_node_indexing(sample_clinic_dataset):
             ), f"Invalid node ID {idx} (max: {max_node_id})"
 
         # Verify that TF-IDF edges connect documents and words correctly
-        # Documents should have IDs from 0 to len(dataset)-1
-        # Words should have IDs from train_size to train_size+vocab_size-1
-        doc_node_ids = set(range(len(dataset)))
-        word_node_ids = set(range(train_size, train_size + graph_builder.vocab_size))
+        # Documents should have IDs from 0 to total_docs-1
+        # Words should have IDs from total_docs to total_docs+vocab_size-1
+        doc_node_ids = set(range(total_docs))
+        word_node_ids = set(range(total_docs, total_docs + graph_builder.vocab_size))
 
         # Check document->word connections
         doc_to_word = [

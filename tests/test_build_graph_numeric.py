@@ -104,20 +104,22 @@ def test_tfidf_numeric_small():
 
     # compute doc_word_freq across all indices
     all_indices = train_idx + val_idx
-    doc_word_freq = gb.calculate_doc_word_freq(all_indices)
+    doc_id_map = {doc_id: new_id for new_id, doc_id in enumerate(all_indices)}
+    doc_word_freq = gb.calculate_doc_word_freq(all_indices, doc_id_map)
 
     # compute tfidf edges
     datasets_info = [
-        (train_dataset.indices, 0, "train"),
-        (val_dataset.indices, len(train_idx) + gb.vocab_size, "val"),
+        (train_dataset.indices, "train"),
+        (val_dataset.indices, "val"),
     ]
     row, col, weight = gb.calculate_tfidf_edges(
         doc_word_freq,
         datasets_info,
-        train_size=len(train_idx),
+        total_docs=len(all_indices),
         row=[],
         col=[],
         weight=[],
+        doc_id_map=doc_id_map,
     )
 
     # We'll check that TF-IDF for 'apple' in doc 0 > 0 and matches manual computation
