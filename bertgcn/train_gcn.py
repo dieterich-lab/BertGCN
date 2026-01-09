@@ -436,7 +436,7 @@ def update_features(
     doc_mask = data["train_mask"] | data["val_mask"] | data["test_mask"]
     doc_indices = torch.where(doc_mask)[0]
 
-    batch_size = 64  # Larger batch for speed
+    batch_size = 128  # Larger batch for speed
     cls_list = []
     with torch.no_grad():
         for i in range(0, len(doc_indices), batch_size):
@@ -595,7 +595,7 @@ def main(cfg: DictConfig) -> float:
         # Setup optimizer, weight decay, and loss
         bert_lr = cfg.training.bert_lr
         gcn_lr = cfg.training.lr
-        weight_decay = getattr(cfg.training, "weight_decay", 1e-2)
+        weight_decay = getattr(cfg.training, "weight_decay", 1e-4)
         optimizer = torch.optim.Adam(
             [
                 {"params": model.bert_model.parameters(), "lr": bert_lr},
@@ -626,13 +626,13 @@ def main(cfg: DictConfig) -> float:
 
         # Warmup + linear decay scheduler (per-step) for stability
         total_steps = cfg.training.epochs * max(1, len(train_loader))
-        warmup_steps = max(1, int(0.05 * total_steps))
+        warmup_steps = max(1, int(0.1 * total_steps))
 
         def lr_lambda(current_step: int):
             if current_step < warmup_steps:
                 return float(current_step) / float(max(1, warmup_steps))
             return max(
-                0.0,
+                0.1,
                 float(total_steps - current_step)
                 / float(max(1, total_steps - warmup_steps)),
             )
@@ -783,7 +783,7 @@ def main(cfg: DictConfig) -> float:
             )
 
         # Recompute features once more with the best model before test
-        data = update_features(cfg.hparams.model_name_or_path, data, device)
+        data = update_features(model, data, device)
         torch.cuda.empty_cache()
 
         # Create a section break for final evaluation
