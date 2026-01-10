@@ -23,6 +23,32 @@ from omegaconf import DictConfig, OmegaConf
 from bertgcn.train_gcn import BertGCN, load_graph_data_from_disk, load_processed_dataset
 
 
+def _resolve_model_dir(cfg: DictConfig) -> Path:
+    """Pick model_dir in priority: cfg.interpretation.model_dir -> newest outputs/train_gcn/**/final_model -> models/final_model."""
+
+    project_root = Path(get_original_cwd())
+    interp = cfg.get("interpretation", {}) if hasattr(cfg, "get") else {}
+    explicit = interp.get("model_dir") if isinstance(interp, dict) else None
+    if explicit:
+        return (project_root / explicit).expanduser().resolve()
+
+    candidates = []
+    try:
+        candidates = sorted(
+            (p for p in project_root.glob("outputs/train_gcn/**/final_model")),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+    except Exception:
+        candidates = []
+
+    fallback = project_root / "models" / "final_model"
+    for cand in candidates + [fallback]:
+        if cand.is_dir():
+            return cand
+    return fallback
+
+
 def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
     model = BertGCN(
         pretrained_model=cfg.hparams.model_name_or_path,
@@ -32,12 +58,13 @@ def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
         n_hidden=cfg.gcn.n_hidden,
         dropout=cfg.gcn.dropout,
     )
-    # Load checkpoint from the default final model path
-    project_root = Path(get_original_cwd())
-    ckpt_path = project_root / "models" / "final_model" / "pytorch_model.bin"
+    model_dir = _resolve_model_dir(cfg)
+    ckpt_path = model_dir / "pytorch_model.bin"
     if ckpt_path.exists():
         state = torch.load(ckpt_path, map_location="cpu")
         model.load_state_dict(state, strict=False)
+    else:
+        raise FileNotFoundError(f"Model checkpoint not found at {ckpt_path}")
     model.eval()
     return model
 
