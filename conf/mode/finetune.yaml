@@ -9,7 +9,6 @@ mlflow_experiment_name: "bertgcn_finetuning"
 # Override MLflow tracking URI for BERT
 mlflow_tracking_uri: "file:outputs/train_bert/mlruns"
 
-# Hydra run directory
 hydra:
   run:
     dir: outputs/train_bert/hydra/${now:%Y-%m-%d_%H-%M-%S}
@@ -31,6 +30,5 @@ hparams:
   use_stratified_split: True
   use_class_weights: True
 
-# Disable optimization sweeper for finetuning
-hydra:
+  # Disable optimization sweeper for finetuning
   sweeper: null

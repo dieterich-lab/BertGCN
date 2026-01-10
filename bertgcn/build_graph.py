@@ -9,6 +9,7 @@ When installed in development mode, changes to this file will be immediately ref
 without needing to reinstall the package.
 """
 
+import json
 import logging
 import os
 import pickle
@@ -49,13 +50,13 @@ from bertgcn.utils import *
 logger = get_logger(__name__)
 
 
-# Set seeds for reproducibility (local helper to avoid any import confusion)
-def _set_seed_local(seed: int = 0) -> None:
-    """Force-ints and set seeds across libs without touching core.setup_environment."""
-    seed = int(seed) if isinstance(seed, (int, float, str, bytes, bytearray)) else 0
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
+# Set seeds for reproducibility
+def set_seed(seed: int = 0) -> None:
+    """Set seeds for reproducibility."""
+    from bertgcn.core import setup_environment
+
+    setup_environment(seed)
+    # Additional CUDA-specific settings, only if torch.cuda is available
     if hasattr(torch, "cuda") and torch.cuda.is_available():
         try:
             torch.cuda.manual_seed_all(seed)
@@ -64,11 +65,6 @@ def _set_seed_local(seed: int = 0) -> None:
             logger.warning(
                 "CUDA support unavailable in PyTorch. Running in CPU-only mode."
             )
-
-
-# Backwards-compatible alias used by legacy tests
-def set_seed(seed: int = 0) -> None:
-    _set_seed_local(seed)
 
 
 @contextmanager
@@ -366,7 +362,7 @@ class GraphBuilder:
         word_window_count: Any,
         word_pair_count: Counter,
         num_window: int,
-        total_docs: int,
+        train_size: int,
     ) -> Tuple[List[int], List[int], List[float]]:
         """
         Calculate PMI (Pointwise Mutual Information) for word-word edges.
@@ -408,11 +404,9 @@ class GraphBuilder:
 
                 # Only add edges with PMI above threshold
                 if pmi > self.min_pmi_threshold:
-                    # Add both directions for undirected graph. Word nodes are
-                    # placed after *all* documents to avoid index collisions
-                    # with val/test documents.
-                    row.extend([total_docs + i, total_docs + j])
-                    col.extend([total_docs + j, total_docs + i])
+                    # Add both directions for undirected graph
+                    row.extend([train_size + i, train_size + j])
+                    col.extend([train_size + j, train_size + i])
                     weight.extend([pmi, pmi])
 
             logger.info(
@@ -421,17 +415,16 @@ class GraphBuilder:
             return row, col, weight
 
     def calculate_doc_word_freq(
-        self, dataset_indices: List[int], doc_id_map: Dict[int, int]
+        self, dataset_indices: List[int]
     ) -> Dict[Tuple[int, int], int]:
         """
-        Calculate word frequency for each document, remapping document ids to the
-        contiguous graph ordering used during adjacency construction.
+        Calculate word frequency for each document.
 
         Args:
             dataset_indices: List of document indices
 
         Returns:
-            Dictionary mapping (remapped_doc_id, word_id) to frequency
+            Dictionary mapping (doc_id, word_id) to frequency
         """
         with log_step("Calculating document-word frequencies"):
             doc_word_freq = {}
@@ -450,16 +443,9 @@ class GraphBuilder:
                         word for word in words if word in self.word2id
                     )
 
-                    # Remap the original dataset index to the contiguous graph id
-                    mapped_doc_id = doc_id_map.get(doc_id)
-                    if mapped_doc_id is None:
-                        raise KeyError(
-                            f"Document id {doc_id} missing from doc_id_map; graph indices must be contiguous."
-                        )
-
                     for word, count in word_counts.items():
                         word_id = self.word2id[word]
-                        doc_word_freq[(mapped_doc_id, word_id)] = count
+                        doc_word_freq[(doc_id, word_id)] = count
 
                 if batch_idx % 5 == 0 or batch_idx == num_batches - 1:
                     logger.info(f"Processed document batch {batch_idx+1}/{num_batches}")
@@ -469,22 +455,20 @@ class GraphBuilder:
     def calculate_tfidf_edges(
         self,
         doc_word_freq: Dict[Tuple[int, int], int],
-        datasets_info: List[Tuple[List[int], str]],
-        total_docs: int,
+        datasets_info: List[Tuple[List[int], int, str]],
+        train_size: int,
         row: List[int],
         col: List[int],
         weight: List[float],
-        doc_id_map: Dict[int, int],
     ) -> Tuple[List[int], List[int], List[float]]:
         """
         Calculate TF-IDF for document-word edges.
 
         Args:
-            doc_word_freq: Document-word frequency dictionary keyed by remapped doc ids
-            datasets_info: List of tuples containing (indices, name) for each dataset split
-            total_docs: Total number of document nodes (train + val + test)
+            doc_word_freq: Document-word frequency dictionary
+            datasets_info: List of tuples containing (indices, offset, name) for each dataset split
+            train_size: Size of training dataset
             row, col, weight: Existing edge information from PMI calculation
-            doc_id_map: Mapping from original dataset indices to contiguous graph ids
 
         Returns:
             Updated row, col, weight lists with TF-IDF edges added
@@ -498,7 +482,7 @@ class GraphBuilder:
 
             # Process datasets
 
-            for indices, dataset_type in datasets_info:
+            for indices, offset, dataset_type in datasets_info:
                 logger.info(f"Processing {dataset_type} documents...")
 
                 batch_size = min(1000, len(indices))
@@ -508,30 +492,22 @@ class GraphBuilder:
                     start_idx = batch_idx * batch_size
                     end_idx = min((batch_idx + 1) * batch_size, len(indices))
 
-                    for doc_id in indices[start_idx:end_idx]:
+                    for batch_pos, doc_id in enumerate(indices[start_idx:end_idx]):
+                        global_pos = start_idx + batch_pos
                         words = self._tokenize(self.dataset.texts[doc_id])
                         total_words_in_doc = len(words) if len(words) > 0 else 1
                         unique_words = set(words) & set(self.word2id.keys())
 
                         for word in unique_words:
                             word_id = self.word2id[word]
-                            mapped_doc_id = doc_id_map.get(doc_id)
-                            if mapped_doc_id is None:
-                                raise KeyError(
-                                    f"Document id {doc_id} missing from doc_id_map; graph indices must be contiguous."
-                                )
-
-                            freq = doc_word_freq.get((mapped_doc_id, word_id), 0)
+                            freq = doc_word_freq.get((doc_id, word_id), 0)
 
                             # Normalized term frequency
                             tf = freq / total_words_in_doc
 
                             if freq > 0:
-                                # keep document indices contiguous according to split order
-                                doc_node_id = mapped_doc_id
-                                word_node_id = (
-                                    total_docs + word_id
-                                )  # words follow all docs
+                                doc_node_id = offset + global_pos
+                                word_node_id = train_size + word_id
 
                                 # Calculate IDF with smoothing
                                 idf = log(
@@ -597,24 +573,14 @@ class GraphBuilder:
 
         # Initialize sparse matrices for each dataset split
         train_size = len(train_dataset)
-        val_size = len(val_dataset)
-        test_size = len(test_dataset)
-        total_docs = train_size + val_size + test_size
-
-        # Remap original dataset indices to contiguous graph ids in split order
-        doc_id_order = list(train_idx) + list(val_idx) + list(test_idx)
-        doc_id_map = {int(doc_id): new_id for new_id, doc_id in enumerate(doc_id_order)}
-        if len(doc_id_map) != total_docs:
-            raise ValueError(
-                "Document id mapping is inconsistent with total docs; ensure splits cover all documents."
-            )
-
         x = csr_matrix((train_size, self.embed_dim), dtype=np.float64)
         y = self.dataset.ohe_labels[train_dataset.indices]
 
+        val_size = len(val_dataset)
         vx = csr_matrix((val_size, self.embed_dim), dtype=np.float64)
         vy = self.dataset.ohe_labels[val_dataset.indices]
 
+        test_size = len(test_dataset)
         tx = csr_matrix((test_size, self.embed_dim), dtype=np.float64)
         ty = self.dataset.ohe_labels[test_dataset.indices]
 
@@ -637,7 +603,7 @@ class GraphBuilder:
 
         # Calculate PMI edges
         row, col, weight = self.calculate_pmi_edges(
-            word_window_count, word_pair_count, num_window, total_docs
+            word_window_count, word_pair_count, num_window, train_size
         )
 
         # Calculate document-word frequencies
@@ -646,21 +612,21 @@ class GraphBuilder:
             + list(val_dataset.indices)
             + list(test_dataset.indices)
         )
-        doc_word_freq = self.calculate_doc_word_freq(all_doc_indices, doc_id_map)
+        doc_word_freq = self.calculate_doc_word_freq(all_doc_indices)
 
         # Calculate TF-IDF edges
         datasets_info = [
-            (train_dataset.indices, "train"),
-            (val_dataset.indices, "val"),
-            (test_dataset.indices, "test"),
+            (train_dataset.indices, 0, "train"),
+            (val_dataset.indices, train_size + self.vocab_size, "val"),
+            (test_dataset.indices, train_size + self.vocab_size + val_size, "test"),
         ]
 
         row, col, weight = self.calculate_tfidf_edges(
-            doc_word_freq, datasets_info, total_docs, row, col, weight, doc_id_map
+            doc_word_freq, datasets_info, train_size, row, col, weight
         )
 
         # Create adjacency matrix
-        node_size = total_docs + self.vocab_size
+        node_size = len(self.dataset) + self.vocab_size
         adj = csr_matrix((weight, (row, col)), shape=(node_size, node_size))
 
         # Check if matrix is symmetric
@@ -715,7 +681,6 @@ class GraphBuilder:
             train_size, val_size, test_size: Sizes of dataset splits
         """
         with log_step("Validating graph structure"):
-            total_docs = train_size + val_size + test_size
             # Check 1: Verify matrix dimensions match expected node count
             expected_nodes = len(self.dataset) + self.vocab_size
             assert adj.shape == (node_size, node_size), (
@@ -741,18 +706,19 @@ class GraphBuilder:
             assert is_symmetric, "Adjacency matrix must be symmetric for GCN"
 
             # Check 4: Verify we have connections for each dataset split
+            doc_range = range(len(self.dataset))
+            word_range = range(train_size, train_size + self.vocab_size)
 
             # Validate train, val, test document node connections
-            for split_name, split_indices in [
-                ("train", range(train_size)),
-                ("val", range(train_size, train_size + val_size)),
-                (
-                    "test",
-                    range(train_size + val_size, train_size + val_size + test_size),
-                ),
+            for split_name, split_size, offset in [
+                ("train", train_size, 0),
+                ("val", val_size, train_size + self.vocab_size),
+                ("test", test_size, train_size + self.vocab_size + val_size),
             ]:
-                if len(split_indices) > 0:  # Skip empty splits
-                    connections = adj[list(split_indices)].sum()
+                if split_size > 0:  # Skip empty splits
+                    split_nodes = range(offset, offset + split_size)
+                    # Get subset of adjacency matrix for this split
+                    connections = adj[list(split_nodes)].sum()
                     assert (
                         connections > 0
                     ), f"No connections found for {split_name} documents"
@@ -857,7 +823,13 @@ def split_dataset(
 
 
 def save_graph_components(
-    graph_components: Dict[str, Any], dataname: str, doclevel: str, testunklar: bool
+    graph_components: Dict[str, Any],
+    dataname: str,
+    doclevel: str,
+    testunklar: bool,
+    train_idx: List[int],
+    val_idx: List[int],
+    test_idx: List[int],
 ) -> None:
     """
     Save graph components to disk.
@@ -887,6 +859,19 @@ def save_graph_components(
         # Define suffix based on testunklar flag
         suffix = f"_{doclevel}_testunklar" if testunklar else f"_{doclevel}"
 
+        # Persist split ordering so training can align token sequences to graph nodes
+        splits_path = data_path / f"ind.{dataname}{suffix}.splits.json"
+        with open(splits_path, "w") as f:
+            json.dump(
+                {
+                    "train_idx": list(map(int, train_idx)),
+                    "val_idx": list(map(int, val_idx)),
+                    "test_idx": list(map(int, test_idx)),
+                },
+                f,
+            )
+        logger.info(f"Saved split metadata to {splits_path}")
+
         # Save all components
         components = {
             "x": x,
@@ -914,11 +899,9 @@ def main(
     batch_size: int = typer.Option(1000, help="Batch size"),
     bidirectional_tfidf: bool = typer.Option(True, help="Bidirectional TF-IDF"),
     min_pmi: float = typer.Option(0.0, help="Minimum PMI"),
-    seed: str = typer.Option("42", help="Random seed"),
+    seed: int = typer.Option(42, help="Random seed"),
     testunklar: bool = typer.Option(False, help="Test unclear samples"),
 ):
-    # Ensure seed is int (typer passes str for int options sometimes)
-    seed = int(seed)
     """Main function to build and save the document-word graph."""
     params = BertGCNParameters(
         doclevel=doclevel,
@@ -930,14 +913,7 @@ def main(
         seed=seed,
         testunklar=testunklar,
     )
-    # Normalize seed eagerly so downstream seed setters always get a plain int
-    try:
-        params.seed = int(params.seed)
-    except Exception:
-        params.seed = 0
-
-    logger.info(f"Graph build seed={params.seed} (type={type(params.seed)})")
-    _set_seed_local(int(params.seed))
+    set_seed(params.seed)
 
     dataname = f"medindcls_{params.doclevel}"
     logger.info(f"Building graph for dataset {dataname}")
@@ -978,7 +954,13 @@ def main(
     )
 
     save_graph_components(
-        graph_components, dataname, params.doclevel, params.testunklar
+        graph_components,
+        dataname,
+        params.doclevel,
+        params.testunklar,
+        train_idx,
+        val_idx,
+        test_idx,
     )
 
     logger.info("Graph building complete!")

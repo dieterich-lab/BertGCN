@@ -154,20 +154,23 @@ def load_corpus(dataset_str):
     ty = ty.toarray() if hasattr(ty, "toarray") else ty
     # print(x.shape, y.shape, vx.shape, vy.shape, tx.shape, ty.shape, allx.shape, ally.shape)
 
+    features = sp.vstack((allx, vx, tx)).tocsr()
+    labels = np.vstack((ally, vy, ty))
+    # print(len(labels))
+
+    # if dataset_str != "med_indication_all_RF_diag":
+    # 	train_idx_orig = parse_index_file("data/{}.train.index".format(dataset_str))
+    # 	train_size = len(train_idx_orig)
+    # 	val_size = train_size - x.shape[0]
+    # else:
     train_size = x.shape[0]
     val_size = vx.shape[0]
     test_size = tx.shape[0]
-    # New layout: [train docs][val docs][test docs][words]
-    doc_features = sp.vstack((x, vx, tx)).tocsr()
-    word_features = allx[train_size:, :]
-    features = sp.vstack((doc_features, word_features)).tocsr()
 
-    # Labels follow the same ordering
-    labels = np.vstack((y, vy, ty, ally[train_size:, :]))
-
-    idx_train = range(train_size)
-    idx_val = range(train_size, train_size + val_size)
-    idx_test = range(train_size + val_size, train_size + val_size + test_size)
+    idx_train = range(len(y))
+    # idx_val = range(len(y), len(y) + val_size)
+    idx_val = range(allx.shape[0], allx.shape[0] + val_size)
+    idx_test = range(allx.shape[0] + val_size, allx.shape[0] + val_size + test_size)
 
     train_mask = sample_mask(idx_train, labels.shape[0])
     val_mask = sample_mask(idx_val, labels.shape[0])

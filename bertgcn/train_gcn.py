@@ -18,7 +18,9 @@ os.environ["TRANSFORMERS_NO_ADVISORY_WARNINGS"] = "1"
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
 warnings.simplefilter("ignore")
+import json
 import logging
+import sys
 
 logging.getLogger().setLevel(logging.ERROR)
 from transformers import logging as hf_logging
@@ -48,6 +50,9 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch_geometric import nn as pyg_nn
 from torch_geometric.utils import dense_to_sparse
 from transformers import AutoModel, AutoTokenizer
+
+# Reuse the plain BERT finetuning pipeline when mix_factor=0 for parity.
+from bertgcn import train_bert as tb
 
 from bertgcn.utils import load_corpus
 
@@ -90,7 +95,8 @@ def _get_logger():
         logger.removeHandler(handler)
 
     # Add console handler with colored formatting
-    console_handler = logging.StreamHandler()
+    # Send logs to stdout so Slurm captures them in *.log (not *.err).
+    console_handler = logging.StreamHandler(stream=sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
@@ -205,6 +211,9 @@ class BertGCN(nn.Module):
                 input_ids=input_ids, attention_mask=attention_mask
             )[0][:, 0]
             bert_logit = self.classifier(cls_feats)
+            # When mixing is disabled (m=0), short-circuit to pure BERT for docs
+            if self.m == 0:
+                return F.log_softmax(bert_logit, dim=1)
             bert_pred = F.softmax(bert_logit, dim=1)
         else:
             bert_pred = None
@@ -342,13 +351,15 @@ def load_graph_data_from_disk(cfg: DictConfig) -> Dict[str, torch.Tensor]:
     print("toarray done", flush=True)
     labels_onehot = y_train + y_val + y_test
 
-    # Set random features for word nodes (they are zero in the graph)
-    n_docs = train_mask.sum() + val_mask.sum() + test_mask.sum()
-    vocab_size = adj.shape[0] - n_docs
+    # Set random features for word nodes (they are zero in the graph).
+    # Masks are ordered as: train docs -> word nodes -> val docs -> test docs.
+    doc_mask = train_mask | val_mask | test_mask
+    word_mask = ~doc_mask
     print("setting random features", flush=True)
-    features_array[n_docs:] = np.random.randn(
-        vocab_size, features_array.shape[1]
-    ).astype(np.float32)
+    random_feats = np.random.randn(word_mask.sum(), features_array.shape[1]).astype(
+        np.float32
+    )
+    features_array[word_mask] = random_feats
     print("random done", flush=True)
 
     # Symmetrize and add self-loops to match original
@@ -374,23 +385,87 @@ def load_graph_data_from_disk(cfg: DictConfig) -> Dict[str, torch.Tensor]:
     edge_weight = torch.tensor(new_data, dtype=torch.float32)
     print("sparse conversion done", flush=True)
 
-    # Load tokenized dataset for input_ids and attention_mask
+    # Load tokenized dataset for input_ids and attention_mask and scatter into graph order
     processed_dir = project_root / "data" / "processed"
     dataset_path_hf = processed_dir / "tokenized_dataset"
     if dataset_path_hf.exists():
         ds = load_from_disk(str(dataset_path_hf))
-        input_ids = torch.stack([torch.tensor(ids) for ids in ds["input_ids"]])
-        attention_mask = torch.stack(
+        tokens_input_ids = torch.stack([torch.tensor(ids) for ids in ds["input_ids"]])
+        tokens_attention = torch.stack(
             [torch.tensor(mask) for mask in ds["attention_mask"]]
         )
-        # Pad to match graph size: docs + words
+
         nb_node = adj.shape[0]
-        if input_ids.shape[0] < nb_node:
-            padding = torch.zeros(
-                (nb_node - input_ids.shape[0], input_ids.shape[1]), dtype=torch.long
+        seq_len = tokens_input_ids.shape[1]
+
+        # Expect total docs to match train+val+test counts
+        total_docs = train_mask.sum() + val_mask.sum() + test_mask.sum()
+        if tokens_input_ids.shape[0] != total_docs:
+            raise ValueError(
+                f"Tokenized dataset docs ({tokens_input_ids.shape[0]}) != graph docs ({total_docs})"
             )
-            input_ids = torch.cat([input_ids, padding], dim=0)
-            attention_mask = torch.cat([attention_mask, padding], dim=0)
+
+        # Default contiguous ordering: [train docs][words][val docs][test docs]
+        doc_mask = train_mask | val_mask | test_mask
+        word_mask = ~doc_mask
+        train_count = int(train_mask.sum())
+        val_count = int(val_mask.sum())
+        test_count = int(test_mask.sum())
+        word_count = int(word_mask.sum())
+        val_offset = train_count + word_count
+        test_offset = val_offset + val_count
+
+        # Reorder token sequences using saved split metadata (produced by build_graph)
+        meta_path = Path(f"{dataset_path}.splits.json")
+        if meta_path.exists():
+            splits = json.loads(meta_path.read_text())
+            train_order = torch.tensor(splits.get("train_idx", []), dtype=torch.long)
+            val_order = torch.tensor(splits.get("val_idx", []), dtype=torch.long)
+            test_order = torch.tensor(splits.get("test_idx", []), dtype=torch.long)
+
+            if (
+                len(train_order) != train_count
+                or len(val_order) != val_count
+                or len(test_order) != test_count
+            ):
+                raise ValueError(
+                    "Split metadata counts do not match graph masks; rebuild graph and processed data."
+                )
+
+            # Gather tokens in the exact order used to build the graph
+            train_tokens = tokens_input_ids[train_order]
+            val_tokens = tokens_input_ids[val_order]
+            test_tokens = tokens_input_ids[test_order]
+
+            train_attention = tokens_attention[train_order]
+            val_attention = tokens_attention[val_order]
+            test_attention = tokens_attention[test_order]
+        else:
+            # Fallback to legacy contiguous ordering (may misalign if graph was shuffled)
+            train_tokens = tokens_input_ids[:train_count]
+            val_tokens = tokens_input_ids[train_count : train_count + val_count]
+            test_tokens = tokens_input_ids[train_count + val_count :]
+
+            train_attention = tokens_attention[:train_count]
+            val_attention = tokens_attention[train_count : train_count + val_count]
+            test_attention = tokens_attention[train_count + val_count :]
+
+        input_ids = torch.zeros((nb_node, seq_len), dtype=torch.long)
+        attention_mask = torch.zeros((nb_node, seq_len), dtype=torch.long)
+
+        # Scatter tokens into the positions indicated by masks (graph order: train -> words -> val -> test)
+        train_idx = torch.where(torch.tensor(train_mask))[0]
+        val_idx = torch.where(torch.tensor(val_mask))[0]
+        test_idx = torch.where(torch.tensor(test_mask))[0]
+
+        input_ids[train_idx] = train_tokens
+        attention_mask[train_idx] = train_attention
+
+        input_ids[val_idx] = val_tokens
+        attention_mask[val_idx] = val_attention
+
+        input_ids[test_idx] = test_tokens
+        attention_mask[test_idx] = test_attention
     else:
         input_ids = torch.zeros((adj.shape[0], 512), dtype=torch.long)  # dummy
         attention_mask = torch.zeros((adj.shape[0], 512), dtype=torch.long)
@@ -552,6 +627,12 @@ def main(cfg: DictConfig) -> float:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"🖥️  Using device: {device}")
 
+    # If mix_factor==0, run the plain BERT finetuning pipeline directly to
+    # ensure parity with train_bert results (and skip the GCN path entirely).
+    if cfg.gcn.mix_factor == 0:
+        logger.info("mix_factor=0 detected; delegating to plain BERT finetune for parity.")
+        return tb.main.__wrapped__(cfg)
+
     # Setup MLflow to write inside outputs/train_gcn (default if unset)
     default_mlflow_uri = f"file:{project_root / 'outputs' / 'train_gcn' / 'mlruns'}"
     tracking_uri = cfg.get("mlflow_tracking_uri") or default_mlflow_uri
@@ -592,18 +673,20 @@ def main(cfg: DictConfig) -> float:
 
         model = model.to(device)
 
-        # Setup optimizer, weight decay, and loss
+        # Setup optimizer, weight decay, and loss. When mix_factor==0 the GCN
+        # path is bypassed, so only optimize BERT + classifier to mirror the
+        # plain BERT training path.
         bert_lr = cfg.training.bert_lr
         gcn_lr = cfg.training.lr
         weight_decay = getattr(cfg.training, "weight_decay", 1e-4)
-        optimizer = torch.optim.Adam(
-            [
-                {"params": model.bert_model.parameters(), "lr": bert_lr},
-                {"params": model.classifier.parameters(), "lr": bert_lr},
-                {"params": model.gcn.parameters(), "lr": gcn_lr},
-            ],
-            weight_decay=weight_decay,
-        )
+        param_groups = [
+            {"params": model.bert_model.parameters(), "lr": bert_lr},
+            {"params": model.classifier.parameters(), "lr": bert_lr},
+        ]
+        if cfg.gcn.mix_factor != 0:
+            param_groups.append({"params": model.gcn.parameters(), "lr": gcn_lr})
+
+        optimizer = torch.optim.Adam(param_groups, weight_decay=weight_decay)
 
         # Scheduler is initialized after data loaders are built
         scheduler = None
@@ -618,11 +701,12 @@ def main(cfg: DictConfig) -> float:
         train_indices = torch.where(data["train_mask"])[0]
         val_indices = torch.where(data["val_mask"])[0]
         test_indices = torch.where(data["test_mask"])[0]
+        batch_size = getattr(cfg.training, "batch_size", 64)
         train_loader = DataLoader(
-            TensorDataset(train_indices), batch_size=64, shuffle=True
+            TensorDataset(train_indices), batch_size=batch_size, shuffle=True
         )
-        val_loader = DataLoader(TensorDataset(val_indices), batch_size=64)
-        test_loader = DataLoader(TensorDataset(test_indices), batch_size=64)
+        val_loader = DataLoader(TensorDataset(val_indices), batch_size=batch_size)
+        test_loader = DataLoader(TensorDataset(test_indices), batch_size=batch_size)
 
         # Warmup + linear decay scheduler (per-step) for stability
         total_steps = cfg.training.epochs * max(1, len(train_loader))

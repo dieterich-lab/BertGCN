@@ -62,6 +62,7 @@ warnings.filterwarnings(
 
 def _get_logger():
     import logging
+    import sys
 
     # Create a custom formatter for better readability
     class ColoredFormatter(logging.Formatter):
@@ -95,7 +96,8 @@ def _get_logger():
         logger.removeHandler(handler)
 
     # Add console handler with colored formatting
-    console_handler = logging.StreamHandler()
+    # Emit logs to stdout so Slurm captures them in *.log files, not *.err.
+    console_handler = logging.StreamHandler(stream=sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
