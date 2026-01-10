@@ -53,7 +53,6 @@ from transformers import AutoModel, AutoTokenizer
 
 # Reuse the plain BERT finetuning pipeline when mix_factor=0 for parity.
 from bertgcn import train_bert as tb
-
 from bertgcn.utils import load_corpus
 
 
@@ -265,6 +264,85 @@ def load_processed_dataset(cfg: DictConfig) -> Tuple[Dataset, LabelEncoder]:
     return gcn_ds, le
 
 
+def _check_graph_alignment(
+    train_mask: np.ndarray,
+    val_mask: np.ndarray,
+    test_mask: np.ndarray,
+    labels_onehot: np.ndarray,
+    splits: Dict[str, Any] | None,
+):
+    """Assert graph ordering and label coverage match expectations.
+
+    The graph is expected to order nodes as [train docs][words][val docs][test docs].
+    This validates mask contiguity, split metadata counts, and label presence for docs.
+    """
+
+    logger = logging.getLogger("train_gcn")
+
+    train_idx = torch.where(torch.tensor(train_mask))[0]
+    val_idx = torch.where(torch.tensor(val_mask))[0]
+    test_idx = torch.where(torch.tensor(test_mask))[0]
+
+    train_count = int(train_mask.sum())
+    val_count = int(val_mask.sum())
+    test_count = int(test_mask.sum())
+    word_count = int((~(train_mask | val_mask | test_mask)).sum())
+
+    val_offset = train_count + word_count
+    test_offset = val_offset + val_count
+
+    expected_train = torch.arange(train_count)
+    expected_val = torch.arange(val_offset, val_offset + val_count)
+    expected_test = torch.arange(test_offset, test_offset + test_count)
+
+    if not torch.equal(train_idx, expected_train):
+        raise ValueError(
+            "Train mask indices are not contiguous from 0; graph/doc ordering likely misaligned."
+        )
+    if not torch.equal(val_idx, expected_val):
+        raise ValueError(
+            "Val mask indices do not match expected offset after word nodes; rebuild graph."
+        )
+    if not torch.equal(test_idx, expected_test):
+        raise ValueError(
+            "Test mask indices do not match expected offset after val nodes; rebuild graph."
+        )
+
+    # Validate split metadata counts and uniqueness if provided
+    if splits:
+        for name, arr, expected_len in (
+            ("train_idx", splits.get("train_idx", []), train_count),
+            ("val_idx", splits.get("val_idx", []), val_count),
+            ("test_idx", splits.get("test_idx", []), test_count),
+        ):
+            if len(arr) != expected_len:
+                raise ValueError(
+                    f"Split metadata {name} length {len(arr)} != expected {expected_len}; rebuild graph."
+                )
+            if len(set(arr)) != len(arr):
+                raise ValueError(
+                    f"Split metadata {name} contains duplicates; rebuild graph."
+                )
+
+    # Ensure every doc node has a label (one-hot rows must sum to 1)
+    labels_sum = labels_onehot.sum(axis=1)
+    for name, idx in ("train", train_idx), ("val", val_idx), ("test", test_idx):
+        if np.any(labels_sum[idx] == 0):
+            raise ValueError(
+                f"{name} split contains unlabeled docs; inspect label encoder or graph build."
+            )
+
+    logger.info(
+        "Graph alignment check passed: train=%d val=%d test=%d word=%d (val_offset=%d, test_offset=%d)",
+        train_count,
+        val_count,
+        test_count,
+        word_count,
+        val_offset,
+        test_offset,
+    )
+
+
 def _create_random_graph_data(
     dataset: Dataset, cfg: DictConfig
 ) -> Dict[str, torch.Tensor]:
@@ -317,11 +395,15 @@ def load_graph_data_from_disk(cfg: DictConfig) -> Dict[str, torch.Tensor]:
             "`cfg.data.graph_dataset` must point to the saved graph files."
         )
 
+    check_graph = bool(getattr(cfg, "check_graph", False))
+
     try:
         project_root = Path(get_original_cwd())
     except Exception:
         project_root = Path.cwd()
     dataset_path = project_root / dataset_str
+    meta_path = Path(f"{dataset_path}.splits.json")
+    splits = None
     graph_indicator = Path(f"{dataset_path}.x")
     if not graph_indicator.exists():
         raise FileNotFoundError(
@@ -351,16 +433,24 @@ def load_graph_data_from_disk(cfg: DictConfig) -> Dict[str, torch.Tensor]:
     print("toarray done", flush=True)
     labels_onehot = y_train + y_val + y_test
 
-    # Set random features for word nodes (they are zero in the graph).
+    # Set features for word nodes (default: random; optional: zeros for parity with original).
     # Masks are ordered as: train docs -> word nodes -> val docs -> test docs.
     doc_mask = train_mask | val_mask | test_mask
     word_mask = ~doc_mask
-    print("setting random features", flush=True)
-    random_feats = np.random.randn(word_mask.sum(), features_array.shape[1]).astype(
-        np.float32
+    zero_word_features = bool(
+        getattr(cfg.training, "zero_word_features", False)
+        or getattr(cfg, "zero_word_features", False)
     )
-    features_array[word_mask] = random_feats
-    print("random done", flush=True)
+    if zero_word_features:
+        print("leaving word features as zeros (parity mode)", flush=True)
+        features_array[word_mask] = 0.0
+    else:
+        print("setting random features", flush=True)
+        random_feats = np.random.randn(word_mask.sum(), features_array.shape[1]).astype(
+            np.float32
+        )
+        features_array[word_mask] = random_feats
+        print("random done", flush=True)
 
     # Symmetrize and add self-loops to match original
     adj = adj + adj.T
@@ -416,7 +506,6 @@ def load_graph_data_from_disk(cfg: DictConfig) -> Dict[str, torch.Tensor]:
         test_offset = val_offset + val_count
 
         # Reorder token sequences using saved split metadata (produced by build_graph)
-        meta_path = Path(f"{dataset_path}.splits.json")
         if meta_path.exists():
             splits = json.loads(meta_path.read_text())
             train_order = torch.tensor(splits.get("train_idx", []), dtype=torch.long)
@@ -450,6 +539,11 @@ def load_graph_data_from_disk(cfg: DictConfig) -> Dict[str, torch.Tensor]:
             val_attention = tokens_attention[train_count : train_count + val_count]
             test_attention = tokens_attention[train_count + val_count :]
 
+        if check_graph:
+            _check_graph_alignment(
+                train_mask, val_mask, test_mask, labels_onehot, splits
+            )
+
         input_ids = torch.zeros((nb_node, seq_len), dtype=torch.long)
         attention_mask = torch.zeros((nb_node, seq_len), dtype=torch.long)
 
@@ -467,6 +561,10 @@ def load_graph_data_from_disk(cfg: DictConfig) -> Dict[str, torch.Tensor]:
         input_ids[test_idx] = test_tokens
         attention_mask[test_idx] = test_attention
     else:
+        if check_graph:
+            raise FileNotFoundError(
+                "Tokenized dataset missing while check_graph is enabled; run preprocess first."
+            )
         input_ids = torch.zeros((adj.shape[0], 512), dtype=torch.long)  # dummy
         attention_mask = torch.zeros((adj.shape[0], 512), dtype=torch.long)
 
@@ -627,10 +725,17 @@ def main(cfg: DictConfig) -> float:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"🖥️  Using device: {device}")
 
+    freeze_features_after_init = bool(
+        getattr(cfg, "freeze_features_after_init", False)
+        or getattr(cfg.get("training", {}), "freeze_features_after_init", False)
+    )
+
     # If mix_factor==0, run the plain BERT finetuning pipeline directly to
     # ensure parity with train_bert results (and skip the GCN path entirely).
     if cfg.gcn.mix_factor == 0:
-        logger.info("mix_factor=0 detected; delegating to plain BERT finetune for parity.")
+        logger.info(
+            "mix_factor=0 detected; delegating to plain BERT finetune for parity."
+        )
         return tb.main.__wrapped__(cfg)
 
     # Setup MLflow to write inside outputs/train_gcn (default if unset)
@@ -653,6 +758,33 @@ def main(cfg: DictConfig) -> float:
         # Create graph data from real dataset
         data = load_graph_data_from_disk(cfg)
         logger.info("Graph data loaded, updating features...")
+
+        # Optional overfit/debug mode: shrink train set and reuse for val/test
+        overfit_debug = bool(getattr(cfg.training, "overfit_debug", False))
+        if overfit_debug:
+            overfit_n = int(getattr(cfg.training, "overfit_num_samples", 32))
+            train_indices_full = torch.where(data["train_mask"])[0]
+            if len(train_indices_full) == 0:
+                raise ValueError("Overfit mode requested but no training nodes found.")
+
+            overfit_n = min(overfit_n, len(train_indices_full))
+            subset = train_indices_full[:overfit_n]
+
+            new_train = torch.zeros_like(data["train_mask"], dtype=torch.bool)
+            new_val = torch.zeros_like(data["val_mask"], dtype=torch.bool)
+            new_test = torch.zeros_like(data["test_mask"], dtype=torch.bool)
+            new_train[subset] = True
+            new_val[subset] = True
+            new_test[subset] = True
+
+            data["train_mask"] = new_train
+            data["val_mask"] = new_val
+            data["test_mask"] = new_test
+
+            logger.info(
+                "🎯 Overfit debug enabled: using %d samples and reusing them for val/test.",
+                overfit_n,
+            )
 
         # Move data to device
         data = {
@@ -694,6 +826,10 @@ def main(cfg: DictConfig) -> float:
 
         # Update features once with BERT (uses the current model)
         data = update_features(model, data, device)
+        if freeze_features_after_init:
+            logger.info(
+                "📌 Freezing graph features after initial CLS extraction (no per-epoch refresh)"
+            )
 
         # Create data loaders
         from torch.utils.data import DataLoader, TensorDataset
@@ -708,23 +844,45 @@ def main(cfg: DictConfig) -> float:
         val_loader = DataLoader(TensorDataset(val_indices), batch_size=batch_size)
         test_loader = DataLoader(TensorDataset(test_indices), batch_size=batch_size)
 
-        # Warmup + linear decay scheduler (per-step) for stability
-        total_steps = cfg.training.epochs * max(1, len(train_loader))
-        warmup_steps = max(1, int(0.1 * total_steps))
-
-        def lr_lambda(current_step: int):
-            if current_step < warmup_steps:
-                return float(current_step) / float(max(1, warmup_steps))
-            return max(
-                0.1,
-                float(total_steps - current_step)
-                / float(max(1, total_steps - warmup_steps)),
+        # Scheduler selection: default warmup+linear; optional MultiStep to mirror original impl
+        scheduler_type = getattr(cfg.training, "scheduler_type", "linear_warmup")
+        if scheduler_type == "multistep":
+            milestones = getattr(cfg.training, "multistep_milestones", [30])
+            gamma = float(getattr(cfg.training, "multistep_gamma", 0.1))
+            scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                optimizer, milestones=milestones, gamma=gamma
             )
+        else:
+            total_steps = cfg.training.epochs * max(1, len(train_loader))
+            warmup_steps = max(1, int(0.1 * total_steps))
 
-        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+            def lr_lambda(current_step: int):
+                if current_step < warmup_steps:
+                    return float(current_step) / float(max(1, warmup_steps))
+                return max(
+                    0.1,
+                    float(total_steps - current_step)
+                    / float(max(1, total_steps - warmup_steps)),
+                )
 
-        # Setup checkpoint directory
-        checkpoint_dir = Path("outputs/train_gcn/checkpoints")
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+        def _safe_load_scheduler_state(
+            scheduler_obj: torch.optim.lr_scheduler._LRScheduler,
+            state_dict: Dict[str, Any],
+            logger_obj: logging.Logger,
+        ) -> None:
+            """Load scheduler state without failing when keys differ across scheduler types."""
+
+            try:
+                scheduler_obj.load_state_dict(state_dict)
+            except Exception as exc:  # noqa: BLE001
+                logger_obj.warning(
+                    "Skipping scheduler state restore due to mismatch: %s", exc
+                )
+
+        # Setup checkpoint directory (per run to avoid clashes across jobs)
+        checkpoint_dir = Path(cfg.hydra.run.dir) / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         best_val_acc = 0.0
@@ -742,7 +900,9 @@ def main(cfg: DictConfig) -> float:
                 checkpoint = torch.load(best_checkpoint, map_location=device)
                 model.load_state_dict(checkpoint["model_state_dict"])
                 optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-                scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+                _safe_load_scheduler_state(
+                    scheduler, checkpoint["scheduler_state_dict"], logger
+                )
                 start_epoch = checkpoint.get("epoch", 0)
                 best_val_acc = checkpoint.get("best_val_acc", 0.0)
                 logger.info(
@@ -781,7 +941,8 @@ def main(cfg: DictConfig) -> float:
 
                 optimizer.zero_grad()
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                if getattr(cfg.training, "grad_clip_enabled", True):
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
                 scheduler.step()
                 epoch_loss += loss.item()
@@ -791,9 +952,10 @@ def main(cfg: DictConfig) -> float:
 
             epoch_loss /= len(train_loader)
 
-            # Update features before evaluation (matches original behavior)
-            data = update_features(model, data, device)
-            torch.cuda.empty_cache()
+            # Update features before evaluation unless explicitly frozen
+            if not freeze_features_after_init:
+                data = update_features(model, data, device)
+                torch.cuda.empty_cache()
 
             # Evaluate on train/val and track validation loss
             train_acc = evaluate(model, data, data["train_mask"], device)
@@ -861,7 +1023,9 @@ def main(cfg: DictConfig) -> float:
             checkpoint = torch.load(best_checkpoint, map_location=device)
             model.load_state_dict(checkpoint["model_state_dict"])
             optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+            _safe_load_scheduler_state(
+                scheduler, checkpoint["scheduler_state_dict"], logger
+            )
             logger.info(
                 f"📂 Loaded best checkpoint for final eval (val_acc={checkpoint.get('best_val_acc', 0):.4f})"
             )
@@ -893,7 +1057,7 @@ def main(cfg: DictConfig) -> float:
         logger.info("✅ Training completed successfully!")
 
         # Save final model hierarchically
-        final_model_dir = Path("models/final_model")
+        final_model_dir = Path(cfg.hydra.run.dir) / "final_model"
         final_model_dir.mkdir(parents=True, exist_ok=True)
 
         # Save model state dict

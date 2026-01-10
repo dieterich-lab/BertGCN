@@ -96,6 +96,7 @@ class GraphBuilder:
         min_token_freq: int = 1,
         lowercase: bool = True,
         hf_tokenizer: Optional[object] = None,
+        legacy_checks: bool = True,
     ):
         """Initialize the GraphBuilder.
 
@@ -106,7 +107,7 @@ class GraphBuilder:
             window_size: Size of sliding window for word co-occurrence
             batch_size: Number of documents to process at once
             bidirectional_tfidf: Whether to add bidirectional TF-IDF edges
-            min_pmi_threshold: Minimum PMI value threshold (default: 0)
+            legacy_checks: Whether to enforce sanity checks against the legacy script
             min_token_freq: Minimum frequency for tokens to be included in vocab
             lowercase: Whether to lowercase tokens
             hf_tokenizer: Optional HuggingFace tokenizer to enforce tokenization parity
@@ -121,6 +122,7 @@ class GraphBuilder:
         self.min_pmi_threshold = min_pmi_threshold
 
         # Tokenization / vocab options
+        self.legacy_checks = bool(legacy_checks)
         self.min_token_freq = int(min_token_freq)
         self.lowercase = bool(lowercase)
         self.hf_tokenizer = hf_tokenizer
@@ -605,6 +607,7 @@ class GraphBuilder:
         row, col, weight = self.calculate_pmi_edges(
             word_window_count, word_pair_count, num_window, train_size
         )
+        pmi_edge_count = len(weight)
 
         # Calculate document-word frequencies
         all_doc_indices = (
@@ -624,6 +627,11 @@ class GraphBuilder:
         row, col, weight = self.calculate_tfidf_edges(
             doc_word_freq, datasets_info, train_size, row, col, weight
         )
+
+        if self.legacy_checks:
+            self._validate_against_legacy(
+                row, col, weight, pmi_edge_count, train_size, val_size, test_size
+            )
 
         # Create adjacency matrix
         node_size = len(self.dataset) + self.vocab_size
@@ -724,6 +732,91 @@ class GraphBuilder:
                     ), f"No connections found for {split_name} documents"
 
             logger.info("Graph structure validation complete - all checks passed")
+
+    def _validate_against_legacy(
+        self,
+        row: List[int],
+        col: List[int],
+        weight: List[float],
+        pmi_edge_count: int,
+        train_size: int,
+        val_size: int,
+        test_size: int,
+    ) -> None:
+        """Sanity checks against the original build_graph.py layout.
+
+        Ensures PMI edges are word-word only, TF-IDF edges connect docs↔words,
+        every doc node has at least one TF-IDF edge, and the classic ordering
+        [train docs][words][val docs][test docs] is respected.
+        """
+
+        word_start = train_size
+        word_end = train_size + self.vocab_size
+        val_start = word_end
+        test_start = val_start + val_size
+
+        def _is_doc(idx: int) -> bool:
+            return (
+                0 <= idx < train_size
+                or val_start <= idx < val_start + val_size
+                or test_start <= idx < test_start + test_size
+            )
+
+        # 1) PMI edges: must be word-word and positive.
+        for r, c, w in zip(
+            row[:pmi_edge_count], col[:pmi_edge_count], weight[:pmi_edge_count]
+        ):
+            if not (word_start <= r < word_end and word_start <= c < word_end):
+                raise ValueError(
+                    "Legacy check failed: PMI edge connects non-word nodes; check window/token logic."
+                )
+            if w <= 0:
+                raise ValueError(
+                    "Legacy check failed: PMI edge weight must be positive (matches original script behavior)."
+                )
+
+        # 2) TF-IDF edges: must connect docs↔words; count coverage per doc.
+        doc_to_word_edges = Counter()
+        for r, c, w in zip(
+            row[pmi_edge_count:], col[pmi_edge_count:], weight[pmi_edge_count:]
+        ):
+            r_doc, c_doc = _is_doc(r), _is_doc(c)
+            r_word, c_word = word_start <= r < word_end, word_start <= c < word_end
+
+            if not ((r_doc and c_word) or (r_word and c_doc)):
+                raise ValueError(
+                    "Legacy check failed: TF-IDF edge must connect a doc node and a word node."
+                )
+
+            if w <= 0:
+                raise ValueError(
+                    "Legacy check failed: TF-IDF edge weight must be positive."
+                )
+
+            if r_doc and c_word:
+                doc_to_word_edges[r] += 1
+            if r_word and c_doc and self.bidirectional_tfidf:
+                doc_to_word_edges[c] += 1
+
+        # 3) Every doc node must have at least one TF-IDF connection.
+        all_doc_nodes: List[int] = (
+            list(range(0, train_size))
+            + list(range(val_start, val_start + val_size))
+            + list(range(test_start, test_start + test_size))
+        )
+        missing_docs = [idx for idx in all_doc_nodes if doc_to_word_edges[idx] == 0]
+        if missing_docs:
+            raise ValueError(
+                f"Legacy check failed: {len(missing_docs)} doc nodes have no TF-IDF edges (e.g., {missing_docs[:5]})."
+            )
+
+        logger.info(
+            "Legacy parity check: PMI edges=%d (unique pairs=%d), TF-IDF edges=%d, docs with TF-IDF edges=%d",
+            pmi_edge_count,
+            pmi_edge_count // 2,
+            len(weight) - pmi_edge_count,
+            len(doc_to_word_edges),
+        )
 
 
 def load_or_create_dataset(tokenizer, doclevel: str, clean: bool = True) -> Any:
@@ -901,6 +994,9 @@ def main(
     min_pmi: float = typer.Option(0.0, help="Minimum PMI"),
     seed: int = typer.Option(42, help="Random seed"),
     testunklar: bool = typer.Option(False, help="Test unclear samples"),
+    legacy_checks: bool = typer.Option(
+        True, help="Run legacy parity checks to mirror original build_graph.py"
+    ),
 ):
     """Main function to build and save the document-word graph."""
     params = BertGCNParameters(
@@ -912,6 +1008,7 @@ def main(
         min_pmi=min_pmi,
         seed=seed,
         testunklar=testunklar,
+        legacy_checks=legacy_checks,
     )
     set_seed(params.seed)
 
@@ -947,6 +1044,7 @@ def main(
         batch_size=params.batch_size,
         bidirectional_tfidf=params.bidirectional_tfidf,
         min_pmi_threshold=params.min_pmi,
+        legacy_checks=params.legacy_checks,
     )
 
     graph_components = graph_builder.build_graph(

@@ -324,16 +324,3 @@ def clean_str(string):
 
 
 # Utility functions for BertGCN
-def load_data():
-    """Placeholder for data loading functionality"""
-    pass
-
-
-def normalize_adj(adj):
-    """Normalize adjacency matrix"""
-    pass
-
-
-def placeholder_function():
-    """Placeholder utility function."""
-    pass

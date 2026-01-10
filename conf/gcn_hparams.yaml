@@ -1,0 +1,24 @@
+# @package _global_
+# Reference GCN/BertGCN hyperparameters (mirrors the original two-layer setup).
+
+gcn:
+  mix_factor: 0.7        # blend weight for GCN logits (1.0 = GCN-only)
+  gcn_layers: 3
+  n_hidden: 400
+  dropout: 0.3
+
+training:
+  lr: 0.0005             # GCN learning rate
+  bert_lr: 0.00002       # BERT encoder/classifier learning rate
+  weight_decay: 0.01
+  epochs: 120
+  batch_size: 64
+  resume: false
+  freeze_features_after_init: false
+  overfit_debug: false    # limit to a tiny subset and reuse it for val/test
+  overfit_num_samples: 32 # number of train samples to overfit on when enabled
+  zero_word_features: false      # keep word nodes at zero (parity with original) when true
+  scheduler_type: linear_warmup  # linear_warmup (default) or multistep
+  multistep_milestones: [30]
+  multistep_gamma: 0.1
+  grad_clip_enabled: true

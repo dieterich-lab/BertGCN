@@ -3,8 +3,15 @@
 # GCN training mode
 mode: train_gcn
 
+defaults:
+  - /gcn_hparams
+  - _self_
+
 # Random seed
 seed: 42
+
+# Validate graph masks/splits before training
+check_graph: false
 
 # Development mode (limits to 1 epoch for quick testing)
 dev: false

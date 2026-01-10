@@ -13,6 +13,7 @@ class BertGCNParameters:
     min_pmi: float = 0.0
     seed: int = 42
     testunklar: bool = False
+    legacy_checks: bool = True
 
 
 def main(
@@ -24,6 +25,9 @@ def main(
     min_pmi: float = typer.Option(0.0, help="Minimum PMI"),
     seed: int = typer.Option(42, help="Random seed"),
     testunklar: bool = typer.Option(False, help="Test unclear samples"),
+    legacy_checks: bool = typer.Option(
+        True, help="Run legacy parity checks to mirror original build_graph.py"
+    ),
 ):
     params = BertGCNParameters(
         doclevel=doclevel,
@@ -34,6 +38,7 @@ def main(
         min_pmi=min_pmi,
         seed=seed,
         testunklar=testunklar,
+        legacy_checks=legacy_checks,
     )
     print("Parameters:")
     for field in params.__dataclass_fields__:
