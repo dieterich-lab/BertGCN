@@ -22,3 +22,4 @@ training:
   multistep_milestones: [30]
   multistep_gamma: 0.1
   grad_clip_enabled: true
+  early_stopping_patience: 3

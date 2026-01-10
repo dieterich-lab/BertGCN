@@ -888,6 +888,8 @@ def main(cfg: DictConfig) -> float:
         best_val_acc = 0.0
         start_epoch = 0
         best_checkpoint = checkpoint_dir / "best_checkpoint.pt"
+        patience = int(getattr(cfg.training, "early_stopping_patience", 0) or 0)
+        no_improve_epochs = 0
 
         # Controlled resume behavior (default: fresh start)
         resume_requested = bool(
@@ -1017,6 +1019,14 @@ def main(cfg: DictConfig) -> float:
                 logger.info(
                     f"💾 New best checkpoint (val_acc={best_val_acc:.4f}) at epoch {epoch+1}: {best_checkpoint}"
                 )
+                no_improve_epochs = 0
+            else:
+                no_improve_epochs += 1
+                if patience > 0 and no_improve_epochs >= patience:
+                    logger.info(
+                        f"⏹ Early stopping triggered after {no_improve_epochs} epochs without val_acc improvement."
+                    )
+                    break
 
         # Load best checkpoint (val accuracy) before final test
         if best_checkpoint.exists():
