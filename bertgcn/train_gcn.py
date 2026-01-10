@@ -882,7 +882,9 @@ def main(cfg: DictConfig) -> float:
                 )
 
         # Resolve run directory; fall back when hydra metadata is missing
-        run_dir = Path(OmegaConf.select(cfg, "hydra.run.dir", default="outputs/train_gcn/debug"))
+        run_dir = Path(
+            OmegaConf.select(cfg, "hydra.run.dir", default="outputs/train_gcn/debug")
+        )
 
         # Setup checkpoint directory (per run to avoid clashes across jobs)
         checkpoint_dir = run_dir / "checkpoints"
@@ -989,6 +991,9 @@ def main(cfg: DictConfig) -> float:
                     ).item() * len(batch_indices)
             val_loss /= max(1, len(val_indices))
 
+            # Log validation loss explicitly for visual confirmation
+            logger.info(f"Validation Loss at epoch {epoch+1}: {val_loss:.4f}")
+
             mlflow.log_metrics(
                 {
                     "train_loss": epoch_loss,
@@ -1005,9 +1010,9 @@ def main(cfg: DictConfig) -> float:
                 )
             )
 
-            # Best-checkpoint on validation accuracy
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
+            # Best-checkpoint on validation loss
+            if val_loss < best_val_acc:  # Change val_acc to val_loss
+                best_val_acc = val_loss  # Update best_val_acc to track val_loss
                 torch.save(
                     {
                         "epoch": epoch + 1,
@@ -1020,14 +1025,14 @@ def main(cfg: DictConfig) -> float:
                     best_checkpoint,
                 )
                 logger.info(
-                    f"💾 New best checkpoint (val_acc={best_val_acc:.4f}) at epoch {epoch+1}: {best_checkpoint}"
+                    f"💾 New best checkpoint (val_loss={best_val_acc:.4f}) at epoch {epoch+1}: {best_checkpoint}"
                 )
                 no_improve_epochs = 0
             else:
                 no_improve_epochs += 1
                 if patience > 0 and no_improve_epochs >= patience:
                     logger.info(
-                        f"⏹ Early stopping triggered after {no_improve_epochs} epochs without val_acc improvement."
+                        f"⏹ Early stopping triggered after {no_improve_epochs} epochs without val_loss improvement."
                     )
                     break
 

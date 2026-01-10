@@ -9,12 +9,14 @@
 cd /home/pwiesenbach/BertGCN
 source /beegfs/homes/pwiesenbach/BertGCN/.venv/bin/activate
 export PYTHONPATH=/home/pwiesenbach/BertGCN:$PYTHONPATH
+export HYDRA_FULL_ERROR=1
+set -x
 
 # Phase 1 sweep: hidden_dim × mix_factor × dropout with linear warmup scheduler
 python -m bertgcn.train_gcn --multirun \
   mode=train_gcn \
   hydra/sweeper=basic \
-  hydra.sweep.dir=outputs/train_gcn/sweeps \
+  hydra.sweep.dir=outputs/train_gcn/sweeps_${SLURM_JOB_ID} \
   'hydra.sweep.subdir=${hydra.job.num}' \
   gcn.gcn_layers=3 \
   gcn.n_hidden=300,400,512 \
