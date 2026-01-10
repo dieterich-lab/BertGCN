@@ -881,8 +881,11 @@ def main(cfg: DictConfig) -> float:
                     "Skipping scheduler state restore due to mismatch: %s", exc
                 )
 
+        # Resolve run directory; fall back when hydra metadata is missing
+        run_dir = Path(OmegaConf.select(cfg, "hydra.run.dir", default="outputs/train_gcn/debug"))
+
         # Setup checkpoint directory (per run to avoid clashes across jobs)
-        checkpoint_dir = Path(cfg.hydra.run.dir) / "checkpoints"
+        checkpoint_dir = run_dir / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
         best_val_acc = 0.0
@@ -1067,7 +1070,7 @@ def main(cfg: DictConfig) -> float:
         logger.info("✅ Training completed successfully!")
 
         # Save final model hierarchically
-        final_model_dir = Path(cfg.hydra.run.dir) / "final_model"
+        final_model_dir = run_dir / "final_model"
         final_model_dir.mkdir(parents=True, exist_ok=True)
 
         # Save model state dict
