@@ -383,6 +383,7 @@ def setup_trainer(
         "load_best_model_at_end": True,
         "metric_for_best_model": "f1",
         "fp16": cfg.hparams.fp16,
+        "disable_tqdm": True,
     }
     # Filter to parameters actually accepted by TrainingArguments.__init__
     try:

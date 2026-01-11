@@ -9,12 +9,13 @@ A BERT-based Graph Convolutional Network for document classification, combining 
 ## Table of Contents
 
 - [Installation](#installation)
-- [Data Format](#data-format)
-- [Modes Overview](#modes-overview)
-- [Usage](#usage)
+- [Quick Start](#quick-start)
+- [Workflow Overview](#workflow-overview)
 - [Configuration Management](#configuration-management)
-- [Output Directory Structure](#output-directory-structure)
+- [Running Experiments and Sweeps](#running-experiments-and-sweeps)
+- [Model Organization](#model-organization)
 - [MLflow Tracking](#mlflow-tracking)
+- [Interpretability](#interpretability)
 - [Testing](#testing)
 - [Contributing](#contributing)
 
@@ -35,337 +36,265 @@ cd BertGCN
 ./install.sh
 ```
 
-## 📊 Data Format
-
-Input files must be CSV format with columns for diagnosis, anamnesis, risk_factor, discharge_letter, medication_type. The preprocessing step handles cleaning and tokenization.
-
-## ⚡ Modes Overview
-
-| Mode         | Description                                                                 | Typical Use/Plugin         |
-|--------------|-----------------------------------------------------------------------------|---------------------------|
-| preprocess   | Clean and tokenize the dataset.                                            | Data preparation          |
-| build-graph  | Build the document-word graph via PMI and TF-IDF edges.                    | Graph construction       |
-| finetune     | Fine-tune BERT for document classification.                                 | Baseline model            |
-| train        | Train the BertGCN ensemble model.                                          | Main model                |
-| predict      | Run inference/prediction on new data.                                       | Evaluation                |
-| interpret    | Feature importance/interpretation using SHAP.                              | Model explanation         |
-
-**Notes:**
-
-- Preprocessing and graph building are prerequisites for training.
-- BERT fine-tuning provides a strong baseline for comparison with BertGCN.
-- All commands support both CLI (`poetry run bertgcn <command>`) and direct script (`poetry run <command>`) execution.
-
-### Mode Quickstart
-
-**Preprocess**
-
-```bash
-# CLI approach
-poetry run bertgcn preprocess
-
-# Direct script approach
-poetry run preprocess mode=preprocess
-```
-
-- Output: `data/processed/tokenized_dataset` plus label encoders.
-
-**Build-graph**
-
-```bash
-# CLI approach
-poetry run bertgcn build-graph
-
-# Direct script approach  
-poetry run build-graph [options]
-```
-
-- Output: Graph components in `data/ind.*` files.
-
-**Train BERT**
-
-```bash
-# CLI approach
-poetry run bertgcn finetune
-
-# Direct script approach
-poetry run finetune mode=finetune [overrides]
-```
-
-- Output: Fine-tuned BERT model in `models/finetuned/`.
-
-**Train GCN**
-
-```bash
-# CLI approach
-poetry run bertgcn train
-
-# Direct script approach
-poetry run train mode=train [overrides]
-```
-
-- Output: Trained BertGCN model in `models/final_model/`.
-
-**Predict**
-
-```bash
-# CLI approach
-poetry run bertgcn predict
-
-# Direct script approach
-poetry run predict mode=train [overrides]
-```
-
-- Requires trained model; outputs predictions CSV.
-
-**Interpret**
-
-```bash
-# CLI approach
-poetry run bertgcn interpret
-
-# Direct script approach
-poetry run interpret mode=train [overrides]
-```
-
-- Outputs SHAP-based feature importance.
+This installs all dependencies via Poetry and sets up the environment.
 
 ---
 
-## 🛠️ Usage
+## ⚡ Quick Start
 
-BertGCN provides two ways to run commands:
-
-### CLI Approach (Recommended for interactive use)
-```bash
-poetry run bertgcn {preprocess | build-graph | finetune | train | predict | interpret}
-```
-
-### Direct Script Approach (Recommended for automation/SLURM)
-```bash
-poetry run {preprocess | build-graph | finetune | train | predict | interpret} mode=<mode> [overrides]
-```
-
-Both approaches support runtime parameter overrides (e.g., `training.epochs=5`).
-
-### Quickstart Commands
-
-With default configs, run the pipeline sequentially:
-
-#### CLI Approach
-```bash
-poetry run bertgcn preprocess
-poetry run bertgcn build-graph
-poetry run bertgcn finetune
-poetry run bertgcn train
-poetry run bertgcn predict
-```
-
-#### Direct Script Approach (for automation)
-```bash
-poetry run preprocess mode=preprocess
-poetry run build-graph [options]
-poetry run finetune mode=finetune
-poetry run train mode=train
-poetry run predict mode=train
-```
-
-### Advanced Interpretability
-
-For detailed document-level interpretability analysis:
+Run the full pipeline with default settings:
 
 ```bash
-# Neighbor-based influence scoring
-poetry run interpret-docs-neighbors mode=train
+# 1. Preprocess data (run once)
+poetry run preprocess
 
-# Integrated Gradients attribution
-poetry run interpret-docs-ig mode=train
+# 2. Build document-word graph
+poetry run build-graph
 
-# SHAP perturbation analysis  
-poetry run interpret-docs-shap mode=train
+# 3. Fine-tune BERT baseline
+poetry run finetune-bert
+
+# 4. Train BertGCN model
+poetry run train-bertgcn
+
+# 5. Run predictions (optional)
+poetry run predict
+
+# 6. Interpret results (optional)
+poetry run interpret-docs-shap
 ```
 
-### Runtime Overrides
+All outputs are organized in `outputs/` and `hydra/` directories. View experiments in MLflow UI.
 
-Pass overrides like `hparams.learning_rate=3e-5` or `training.epochs=10` after the command to tweak parameters without editing YAML.
+---
+
+## 🔄 Workflow Overview
+
+BertGCN follows a sequential pipeline:
+
+### 1. **Preprocess** (`poetry run preprocess`)
+   - Cleans and tokenizes `data/med_indication_all_RF_diag.csv`
+   - Saves processed dataset to `data/processed/tokenized_dataset`
+   - Outputs label encoders for downstream use
+   - **Run once** after data changes
+
+### 2. **Build Graph** (`poetry run build-graph`)
+   - Constructs document-word graph using sliding windows, PMI, and TF-IDF edges
+   - Saves graph components (`adj`, `x`, `tx`, etc.) to `data/ind.*` files
+   - Configurable via `bertgcn/params.py` (window size, BERT model, etc.)
+
+### 3. **Fine-tune BERT** (`poetry run finetune-bert`)
+   - Trains plain BERT for document classification as baseline
+   - Uses Hydra config from `conf/config.yaml`
+   - Outputs model to `outputs/train_bert/final_model`
+   - Logs to MLflow in `outputs/train_bert/mlruns`
+
+### 4. **Train BertGCN** (`poetry run train-bertgcn`)
+   - Trains the full BertGCN ensemble (BERT + GCN)
+   - Supports hyperparameter sweeps via Optuna
+   - Organizes models by hyperparameters in `hydra/gcn/<timestamp>/`
+   - Logs experiments to MLflow in `outputs/train_gcn/mlruns`
+
+### 5. **Predict** (`poetry run predict`)
+   - Runs inference on new data using trained models
+   - Requires model path and input data
+
+### 6. **Interpret** (`poetry run interpret` or `poetry run interpret-docs-*`)
+   - Provides feature-level or document-level explanations
+   - See [Interpretability](#interpretability) section
 
 ---
 
 ## ⚙️ Configuration Management
 
-BertGCN uses Hydra to compose configurations. The framework supports mode-based overrides.
+BertGCN uses Hydra for flexible configuration. All configs are in `conf/`:
 
-### Config Structure
+- `conf/config.yaml` - Main config composing defaults
+- `conf/main.yaml` - Global settings (MLflow URI, experiment names)
+- `conf/hparams.yaml` - Hyperparameters (learning rate, dropout, etc.)
+- `conf/gcn.yaml` - GCN-specific settings (mix_factor, layers, zero_word_features)
+- `conf/dataset.yaml` - Dataset splits and paths
 
-- `conf/config.yaml` - Shared defaults and mode selection
-- `conf/mode/` - Mode-specific configurations
-- `conf/hparams.yaml` - Hyperparameters
-- `conf/dataset.yaml` - Dataset settings
+### Runtime Overrides
 
-### Custom Experiments
+Override any parameter at runtime:
 
-Create experiment configs in `./experiments/`:
+```bash
+# Change learning rate
+poetry run train-bertgcn hparams.learning_rate=3e-5
 
+# Modify GCN settings
+poetry run train-bertgcn gcn.mix_factor=0.7 gcn.zero_word_features=true
+
+# Adjust training
+poetry run train-bertgcn training.epochs=50 training.batch_size=32
 ```
-experiments/
-└── my_experiment/
-    └── config.yaml
-```
 
-With mode selection:
+### Custom Configs
+
+Create experiment-specific configs in `experiments/my_experiment/config.yaml`:
 
 ```yaml
 defaults:
-  - mode: train_bert
   - _self_
+  - main
+  - hparams
+  - gcn
+  - dataset
 
 hparams:
   learning_rate: 2e-5
+
+gcn:
+  mix_factor: 0.8
 ```
 
 Run with:
 
 ```bash
-poetry run bertgcn finetune --config-path experiments/my_experiment
+poetry run train-bertgcn --config-path experiments/my_experiment
 ```
 
 ---
 
-## 📂 Output Directory Structure
+## 🔍 Running Experiments and Sweeps
 
-All outputs are organized under the `outputs/` directory with mode-specific subfolders:
+### Single Runs
+
+Run with custom parameters:
+
+```bash
+poetry run train-bertgcn hparams.learning_rate=1e-5 gcn.mix_factor=0.5
+```
+
+### Hyperparameter Sweeps
+
+Use Optuna for automated sweeps:
+
+```bash
+# Sweep learning rate and mix_factor
+poetry run train-bertgcn --multirun \
+  hparams.learning_rate=1e-5,3e-5,5e-5 \
+  gcn.mix_factor=0.3,0.5,0.7 \
+  gcn.zero_word_features=true,false
+```
+
+- Each combination runs as a separate job
+- Results logged to MLflow for comparison
+- Models saved in organized directories
+
+### SLURM Integration
+
+For cluster jobs, use the provided scripts in `slurm/`:
+
+```bash
+# Submit BERT training
+sbatch slurm/train_bert.sh
+
+# Submit GCN sweep
+sbatch slurm/train_gcn_sweep_phase1.sh
+```
+
+Scripts handle GPU allocation and environment setup.
+
+---
+
+## 📂 Model Organization
+
+Models are automatically organized by hyperparameters for easy retrieval:
+
+### Directory Structure
 
 ```
 outputs/
-├── train_bert/              # BERT fine-tuning outputs
-│   ├── hydra/               # Hydra run directories (one per run)
-│   │   └── <timestamp>/     # e.g., 2025-08-28_12-39-43/
-│   │       ├── config.yaml  # Resolved configuration
-│   │       ├── overrides.yaml
-│   │       └── .hydra/
-│   └── mlruns/              # MLflow tracking data for BERT runs
-│       └── <experiment_id>/ # e.g., 142214766644063952/
-│           ├── <run_id>/    # Individual run data
-│           │   ├── metrics/
-│           │   ├── params/
-│           │   ├── tags/
-│           │   ├── artifacts/
-│           │   └── meta.yaml
-│           └── meta.yaml
-└── train_gcn/               # BertGCN training outputs
-    ├── checkpoints/         # Training checkpoints for resuming
-    │   └── checkpoint_epoch_*.pt
-    ├── hydra/               # Hydra run directories (one per run)
-    │   └── <timestamp>/     # e.g., 2025-08-29_00-08-27/
-    │       ├── config.yaml  # Resolved configuration
-    │       ├── overrides.yaml
-    │       └── .hydra/
-    └── mlruns/              # MLflow tracking data for GCN runs
-        └── <experiment_id>/ # e.g., 273766186618787412/
-            ├── <run_id>/    # Individual run data
-            │   ├── metrics/
-            │   ├── params/
-            │   ├── tags/
-            │   ├── artifacts/
-            │   └── meta.yaml
-            └── meta.yaml
+├── train_bert/
+│   ├── final_model/          # BERT baseline model
+│   └── mlruns/               # MLflow tracking
+└── train_gcn/
+    └── mlruns/               # MLflow tracking
 
-models/                      # Final trained models
-├── finetuned/               # BERT fine-tuning results
-│   └── <timestamp>/
-│       ├── pytorch_model.bin
-│       ├── config.json
-│       └── label_encoder.joblib
-└── final_model/             # BertGCN final model
-    ├── pytorch_model.bin
-    ├── config.json
-    ├── special_tokens_map.json
-    ├── tokenizer_config.json
-    ├── tokenizer.json
-    ├── vocab.txt
-    └── training_args.bin
-
-data/                        # Processed data and graphs
-├── processed/
-│   ├── tokenized_dataset/
-│   ├── label_encoder.joblib
-│   └── meds_label_encoder.joblib
-└── ind.*                    # Graph components (PMI/TF-IDF edges)
+hydra/
+└── gcn/
+    └── <timestamp>/          # e.g., 2026-01-11_12-00-00/
+        ├── checkpoints_lr1.0e-05_drop0.5_m0.5_zero1/
+        │   └── best_checkpoint.pt
+        ├── final_model_lr1.0e-05_drop0.5_m0.5_zero1/
+        │   ├── pytorch_model.bin
+        │   ├── config.json
+        │   └── tokenizer/
+        ├── config.yaml        # Full resolved config
+        └── overrides.yaml     # Runtime overrides
 ```
 
-### Artifact Contents
+### Naming Convention
 
-- **Models**: Saved in `models/` with timestamps for versioning
-- **Datasets**: Cached processed data for reproducibility
-- **Graphs**: Sparse matrices for document-word relationships
-- **Predictions**: CSV files with class probabilities
-- **Interpretations**: SHAP values for feature importance
+Model directories include key parameters: `lr{learning_rate}_drop{dropout}_m{mix_factor}_zero{zero_word_features}`
+
+- `lr`: Learning rate (scientific notation)
+- `drop`: Dropout rate
+- `m`: GCN mix factor
+- `zero`: Zero word features flag
+
+This makes it easy to identify models without checking configs.
+
+### For Sweeps
+
+Each sweep job creates its own `<timestamp>/` directory with parameter-specific subdirs.
 
 ---
 
 ## 📈 MLflow Tracking
 
-MLflow tracking is enabled by default and writes to mode-specific directories under `outputs/`:
+MLflow automatically tracks all experiments:
 
 ```bash
-# View BERT fine-tuning experiments
-poetry run mlflow ui --backend-store-uri outputs/train_bert/mlruns
-
-# View BertGCN training experiments  
+# View GCN experiments
 poetry run mlflow ui --backend-store-uri outputs/train_gcn/mlruns
+
+# View BERT experiments
+poetry run mlflow ui --backend-store-uri outputs/train_bert/mlruns
 ```
 
-Tracks parameters, metrics, and artifacts automatically for each run.
+### What Gets Logged
+
+- **Parameters**: All config values
+- **Metrics**: Training/validation loss, accuracy, F1, precision, recall
+- **Artifacts**: Final models, config files
+- **Tags**: Experiment metadata
+
+Compare runs, download models, and analyze performance across hyperparameters.
 
 ---
 
-## 🧭 Document-Level Interpretability for Precedents Detection (Major Extension)
+## 🧭 Document-Level Interpretability for Precedents Detection
 
-**Revolutionary Feature:** BertGCN introduces groundbreaking document-level interpretability, allowing users to explain predictions by identifying influential documents (precedents) that shaped the model's decision. This transforms opaque black-box models into transparent, precedent-aware systems, enabling:
+BertGCN provides three approaches to explain predictions by identifying influential documents (precedents):
 
-- **Legal Analysis:** Identify case precedents influencing judicial decisions.
-- **Medical Diagnostics:** Highlight similar patient records affecting diagnoses.
-- **Regulatory Compliance:** Trace decision influences for auditing and transparency.
-- **Research & Education:** Understand model reasoning for scientific insights.
+### A. Neighbor Scoring (`poetry run interpret-docs-neighbors`)
+- Fast method using edge weights and GCN probabilities
+- Output: `outputs/train_gcn/interpret/document_influence.csv`
 
-Three complementary approaches explain a document's prediction by citing influential *documents* (precedents). All assume a trained BertGCN and the graph with edge weights.
+### B. Integrated Gradients (`poetry run interpret-docs-ig`)
+- Gradient-based attribution over document features
+- Output: `outputs/train_gcn/interpret/document_influence_ig.csv`
 
-- **A. Neighbor scoring (fast, edge-weighted GCN probs)**
-  - Script: `poetry run interpret-docs-neighbors mode=train`
-  - How it works: For a target doc *t* with predicted class *c*, each incoming
-    neighbor *j* gets a score `edge_weight(j→t) * P_c(j)` using the GCN class
-    probability of *j*. Top-k neighbors are returned.
-  - Output: `outputs/train_gcn/interpret/document_influence.csv` with
-    `top_neighbors` and `neighbor_scores`.
+### C. SHAP-style Perturbation (`poetry run interpret-docs-shap`)
+- Leave-one-out edge removal analysis
+- Output: `outputs/train_gcn/interpret/document_influence_shap.csv`
 
-- **B. Integrated Gradients over document features (gradient-based)**
-  - Script: `poetry run interpret-docs-ig mode=train`
-  - How it works: Runs IG on the full document feature matrix for the target
-    doc and class; sums attributions per document to produce a ranked list of
-    influential documents.
-  - Output: `outputs/train_gcn/interpret/document_influence_ig.csv`.
-
-- **C. SHAP-style neighbor perturbation (leave-one-out edges)**
-  - Script: `poetry run interpret-docs-shap mode=train`
-  - How it works: For each incoming neighbor edge to the target doc, removes
-    the edge and measures the drop in the target class probability. The delta
-    serves as the neighbor's importance (SHAP-like intuition without full
-    kernel sampling).
-  - Output: `outputs/train_gcn/interpret/document_influence_shap.csv`.
-
-**Config knobs (Hydra via mode/train_gcn):** `interpretation.top_k` (default 5),
-`interpretation.max_docs` (optional), plus model/graph settings. Models load
-from `models/final_model/pytorch_model.bin` when present.
+Configure via `interpretation.top_k` (default 5) and other settings.
 
 ---
 
 ## 🧪 Testing
 
-Run tests with:
+Run the test suite:
 
 ```bash
 poetry run pytest tests/
 ```
+
+Tests cover config behavior, graph building, and training stability.
 
 ---
 

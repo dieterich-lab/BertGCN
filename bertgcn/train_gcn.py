@@ -725,6 +725,9 @@ def main(cfg: DictConfig) -> float:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"🖥️  Using device: {device}")
 
+    # Organize runs by hyperparameters for better model management
+    param_str = f"lr{cfg.hparams.learning_rate:.1e}_drop{cfg.hparams.dropout}_m{cfg.gcn.mix_factor}_zero{int(cfg.gcn.zero_word_features)}"
+
     freeze_features_after_init = bool(
         getattr(cfg, "freeze_features_after_init", False)
         or getattr(cfg.get("training", {}), "freeze_features_after_init", False)
@@ -886,11 +889,11 @@ def main(cfg: DictConfig) -> float:
             OmegaConf.select(cfg, "hydra.run.dir", default="outputs/train_gcn/debug")
         )
 
-        # Setup checkpoint directory (per run to avoid clashes across jobs)
-        checkpoint_dir = run_dir / "checkpoints"
+        # Setup checkpoint directory (per run to avoid clashes across jobs), organized by params
+        checkpoint_dir = run_dir / f"checkpoints_{param_str}"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        best_val_acc = float('inf')
+        best_val_acc = float("inf")
         start_epoch = 0
         best_checkpoint = checkpoint_dir / "best_checkpoint.pt"
         patience = int(getattr(cfg.training, "early_stopping_patience", 0) or 0)
@@ -1075,7 +1078,7 @@ def main(cfg: DictConfig) -> float:
         logger.info("✅ Training completed successfully!")
 
         # Save final model hierarchically
-        final_model_dir = run_dir / "final_model"
+        final_model_dir = run_dir / f"final_model_{param_str}"
         final_model_dir.mkdir(parents=True, exist_ok=True)
 
         # Save model state dict
