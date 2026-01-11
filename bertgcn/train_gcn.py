@@ -30,7 +30,9 @@ hf_logging.disable_progress_bar()
 
 import logging
 import random
+import subprocess
 import warnings
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
@@ -43,10 +45,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from datasets import Dataset, load_from_disk
-from hydra.utils import get_original_cwd
 from hydra.core.hydra_config import HydraConfig
-from datetime import datetime
-import subprocess
+from hydra.utils import get_original_cwd
 from omegaconf import DictConfig, OmegaConf
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import DataLoader, TensorDataset
@@ -777,7 +777,9 @@ def main(cfg: DictConfig) -> float:
     # Try to get short git sha for tagging
     try:
         git_sha = (
-            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=str(project_root))
+            subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"], cwd=str(project_root)
+            )
             .decode()
             .strip()
         )

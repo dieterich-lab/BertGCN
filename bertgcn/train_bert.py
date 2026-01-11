@@ -16,9 +16,11 @@ Edit CONFIG SECTION to adjust hyperparameters.
 from __future__ import annotations
 
 import inspect
+import subprocess
 import sys
 import warnings
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Tuple
 
@@ -31,9 +33,6 @@ from datasets import Dataset, load_from_disk
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import get_original_cwd
 from omegaconf import DictConfig, OmegaConf
-from hydra.core.hydra_config import HydraConfig
-from datetime import datetime
-import subprocess
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Subset
 from transformers import (
@@ -615,7 +614,9 @@ def main(cfg: DictConfig):
     # Tag run and start MLflow run with deterministic run_name
     try:
         git_sha = (
-            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=str(project_root))
+            subprocess.check_output(
+                ["git", "rev-parse", "--short", "HEAD"], cwd=str(project_root)
+            )
             .decode()
             .strip()
         )
@@ -624,7 +625,13 @@ def main(cfg: DictConfig):
 
     with mlflow.start_run(run_name=out_dir.name):
         try:
-            mlflow.set_tags({"hydra_run_dir": str(out_dir), "entry_script": "finetune_bert", "git_sha": git_sha})
+            mlflow.set_tags(
+                {
+                    "hydra_run_dir": str(out_dir),
+                    "entry_script": "finetune_bert",
+                    "git_sha": git_sha,
+                }
+            )
         except Exception:
             pass
         # Log resolved config for reproducibility
