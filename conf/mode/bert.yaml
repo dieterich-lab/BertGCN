@@ -7,7 +7,7 @@ mode: bert
 mlflow_experiment_name: "bertgcn_finetuning"
 
 # Override MLflow tracking URI for BERT
-mlflow_tracking_uri: "file:outputs/bert/mlruns"
+mlflow_tracking_uri: "file:/home/pwiesenbach/BertGCN/outputs/bert/mlruns"
 
 hydra:
   run:

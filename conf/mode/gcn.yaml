@@ -20,7 +20,7 @@ dev: false
 mlflow_experiment_name: "minimal_gcn_training"
 
 # Override MLflow tracking URI for GCN
-mlflow_tracking_uri: "file:outputs/gcn/mlruns"
+mlflow_tracking_uri: "file:/home/pwiesenbach/BertGCN/outputs/gcn/mlruns"
 
 # Hydra run directory
 hydra:
