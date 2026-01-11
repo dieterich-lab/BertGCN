@@ -152,7 +152,7 @@ def run_document_ig(cfg: DictConfig):
     import pandas as pd
 
     project_root = Path(get_original_cwd())
-    out_dir = project_root / "outputs" / "train_gcn" / "interpret"
+    out_dir = project_root / "outputs" / "gcn" / "interpret"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "document_influence_ig.csv"
     pd.DataFrame(rows).to_csv(out_file, index=False)

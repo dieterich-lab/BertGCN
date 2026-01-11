@@ -64,7 +64,7 @@ poetry run predict
 poetry run interpret-docs-shap
 ```
 
-All outputs are organized in `outputs/` and `hydra/` directories. View experiments in MLflow UI.
+All outputs are organized in `outputs/bert/` and `outputs/gcn/` directories. View experiments in MLflow UI.
 
 ---
 
@@ -86,14 +86,14 @@ BertGCN follows a sequential pipeline:
 ### 3. **Fine-tune BERT** (`poetry run finetune-bert`)
    - Trains plain BERT for document classification as baseline
    - Uses Hydra config from `conf/config.yaml`
-   - Outputs model to `outputs/train_bert/final_model`
-   - Logs to MLflow in `outputs/train_bert/mlruns`
+   - Outputs model to `outputs/bert/final_model`
+   - Logs to MLflow in `outputs/bert/mlruns`
 
 ### 4. **Train BertGCN** (`poetry run train-bertgcn`)
    - Trains the full BertGCN ensemble (BERT + GCN)
    - Supports hyperparameter sweeps via Optuna
-   - Organizes models by hyperparameters in `hydra/gcn/<timestamp>/`
-   - Logs experiments to MLflow in `outputs/train_gcn/mlruns`
+   - Organizes models by hyperparameters in `outputs/gcn/hydra/<timestamp>/` (single runs) or `outputs/gcn/multirun/<timestamp>/` (sweeps)
+   - Logs experiments to MLflow in `outputs/gcn/mlruns`
 
 ### 5. **Predict** (`poetry run predict`)
    - Runs inference on new data using trained models
@@ -207,23 +207,15 @@ Models are automatically organized by hyperparameters for easy retrieval:
 
 ```
 outputs/
-├── train_bert/
+├── bert/
 │   ├── final_model/          # BERT baseline model
+│   ├── hydra/<timestamp>/    # Hydra logs for single runs
 │   └── mlruns/               # MLflow tracking
-└── train_gcn/
+└── gcn/
+    ├── hydra/<timestamp>/    # Hydra logs for single runs
+    ├── multirun/<timestamp>/ # Hydra logs for sweeps
+    ├── final_model/          # Best model (if applicable)
     └── mlruns/               # MLflow tracking
-
-outputs/
-└── train_gcn/
-   └── <timestamp>/          # e.g., 2026-01-11_12-00-00/
-      ├── checkpoints_m0.25/  # Best checkpoint (param-organized)
-      │   └── best_checkpoint.pt
-      ├── final_model_m0.25/  # Final saved model
-      │   ├── pytorch_model.bin
-      │   ├── config.json
-      │   └── tokenizer/
-      ├── cfg.yaml           # Full resolved config
-      └── overrides.yaml     # Runtime overrides
 ```
 
 ### Naming Convention
@@ -236,7 +228,7 @@ This keeps names concise while differentiating runs by the swept parameter.
 
 ### For Sweeps
 
-Each sweep job creates its own `<timestamp>/` directory with parameter-specific subdirs.
+Each sweep job creates its own `<timestamp>/` directory under `multirun/` with parameter-specific subdirs.
 
 ---
 
@@ -246,10 +238,10 @@ MLflow automatically tracks all experiments:
 
 ```bash
 # View GCN experiments
-poetry run mlflow ui --backend-store-uri outputs/train_gcn/mlruns
+poetry run mlflow ui --backend-store-uri outputs/gcn/mlruns
 
 # View BERT experiments
-poetry run mlflow ui --backend-store-uri outputs/train_bert/mlruns
+poetry run mlflow ui --backend-store-uri outputs/bert/mlruns
 ```
 
 ### What Gets Logged
@@ -269,15 +261,15 @@ BertGCN provides three approaches to explain predictions by identifying influent
 
 ### A. Neighbor Scoring (`poetry run interpret-docs-neighbors`)
 - Fast method using edge weights and GCN probabilities
-- Output: `outputs/train_gcn/interpret/document_influence.csv`
+- Output: `outputs/gcn/interpret/document_influence.csv`
 
 ### B. Integrated Gradients (`poetry run interpret-docs-ig`)
 - Gradient-based attribution over document features
-- Output: `outputs/train_gcn/interpret/document_influence_ig.csv`
+- Output: `outputs/gcn/interpret/document_influence_ig.csv`
 
 ### C. SHAP-style Perturbation (`poetry run interpret-docs-shap`)
 - Leave-one-out edge removal analysis
-- Output: `outputs/train_gcn/interpret/document_influence_shap.csv`
+- Output: `outputs/gcn/interpret/document_influence_shap.csv`
 
 Configure via `interpretation.top_k` (default 5) and other settings.
 

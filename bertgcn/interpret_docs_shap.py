@@ -25,7 +25,7 @@ from bertgcn.train_gcn import BertGCN, load_graph_data_from_disk, load_processed
 
 
 def _resolve_model_dir(cfg: DictConfig) -> Path:
-    """Pick model_dir in priority: cfg.interpretation.model_dir -> newest outputs/train_gcn/**/final_model -> models/final_model."""
+    """Pick model_dir in priority: cfg.interpretation.model_dir -> newest outputs/gcn/**/final_model -> models/final_model."""
 
     project_root = Path(get_original_cwd())
     interp = cfg.get("interpretation", {}) if hasattr(cfg, "get") else {}
@@ -35,7 +35,7 @@ def _resolve_model_dir(cfg: DictConfig) -> Path:
 
     try:
         candidates = sorted(
-            (p for p in project_root.glob("outputs/train_gcn/**/final_model")),
+            (p for p in project_root.glob("outputs/gcn/**/final_model")),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )

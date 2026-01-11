@@ -1,17 +1,19 @@
 # @package _global_
 
 # BERT finetuning mode
-mode: finetune
+mode: bert
 
 # Override experiment name for finetuning
 mlflow_experiment_name: "bertgcn_finetuning"
 
 # Override MLflow tracking URI for BERT
-mlflow_tracking_uri: "file:outputs/train_bert/mlruns"
+mlflow_tracking_uri: "file:outputs/bert/mlruns"
 
 hydra:
   run:
-    dir: outputs/train_bert/hydra/${now:%Y-%m-%d_%H-%M-%S}
+    dir: outputs/bert/hydra/${now:%Y-%m-%d_%H-%M-%S}
+  sweep:
+    dir: outputs/bert/multirun/${now:%Y-%m-%d_%H-%M-%S}
 
 # BERT hyperparameters (needed for finetuning)
 hparams:

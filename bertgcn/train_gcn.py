@@ -21,6 +21,7 @@ warnings.simplefilter("ignore")
 import json
 import logging
 import sys
+import tempfile
 
 logging.getLogger().setLevel(logging.ERROR)
 from transformers import logging as hf_logging
@@ -112,7 +113,7 @@ def _format_metrics_gcn(epoch, loss, train_acc, val_acc, max_epochs):
     return f"{progress} | {metrics}"
 
 
-def _log_gcn_training_summary(test_acc, final_dir, mlruns_path, logger):
+def _log_gcn_training_summary(test_acc, mlruns_path, logger):
     """Log a comprehensive GCN training summary."""
     summary_lines = []
     summary_lines.append("🎯 GCN TRAINING COMPLETED SUCCESSFULLY")
@@ -121,16 +122,14 @@ def _log_gcn_training_summary(test_acc, final_dir, mlruns_path, logger):
     summary_lines.append(f"   • Test Accuracy: {test_acc:.1%}")
     summary_lines.append("")
     summary_lines.append("💾 MODEL ARTIFACTS:")
-    summary_lines.append(f"   • Final model saved to: {final_dir}")
+    summary_lines.append(f"   • Final model logged to MLflow (artifact: final_model)")
     summary_lines.append(f"   • MLflow experiments:   {mlruns_path}")
     summary_lines.append("")
     summary_lines.append("🚀 NEXT STEPS:")
     summary_lines.append(
         f"   • View MLflow UI: mlflow ui --backend-store-uri {mlruns_path}"
     )
-    summary_lines.append(
-        "   • Load model: BertGCN.from_pretrained() with saved state_dict"
-    )
+    summary_lines.append("   • Load model: Download from MLflow artifact 'final_model'")
 
     # Create a special log record for highlighting
     import logging
@@ -729,7 +728,7 @@ def main(cfg: DictConfig) -> float:
     logger.info(f"🖥️  Using device: {device}")
 
     # Organize runs by hyperparameters for better model management
-    param_str = f"m{cfg.gcn.mix_factor}"
+    param_str = f"m{cfg.gcn.mix_factor}_h{cfg.model.n_hidden}_d{cfg.model.dropout}_l{cfg.gcn.gcn_layers}"
 
     freeze_features_after_init = bool(
         getattr(cfg, "freeze_features_after_init", False)
@@ -753,7 +752,8 @@ def main(cfg: DictConfig) -> float:
 
     if not hydra_run_dir or "None" in str(hydra_run_dir):
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        job = getattr(cfg, "mode", None) or "train_gcn"
+        job = getattr(cfg, "mode", None)
+        job = job if job and job != "None" else "gcn"
         hydra_run_dir = project_root / "outputs" / job / ts
 
     run_dir = hydra_run_dir
@@ -766,7 +766,7 @@ def main(cfg: DictConfig) -> float:
         pass
 
     # Setup MLflow tracking under outputs/<job>/mlruns
-    default_mlflow_uri = f"file:{project_root / 'outputs' / 'train_gcn' / 'mlruns'}"
+    default_mlflow_uri = f"file:{project_root / 'outputs' / 'gcn' / 'mlruns'}"
     tracking_uri = cfg.get("mlflow_tracking_uri") or default_mlflow_uri
     Path(str(tracking_uri).replace("file:", "")).mkdir(parents=True, exist_ok=True)
     mlflow.set_tracking_uri(tracking_uri)
@@ -847,8 +847,8 @@ def main(cfg: DictConfig) -> float:
             nb_class=n_classes,
             m=cfg.gcn.mix_factor,
             gcn_layers=cfg.gcn.gcn_layers,
-            n_hidden=cfg.gcn.n_hidden,
-            dropout=cfg.gcn.dropout,
+            n_hidden=cfg.model.n_hidden,
+            dropout=cfg.model.dropout,
         )
 
         model = model.to(device)
@@ -1083,25 +1083,44 @@ def main(cfg: DictConfig) -> float:
         # Load best checkpoint (val accuracy) before final test
         if best_checkpoint.exists():
             checkpoint = torch.load(best_checkpoint, map_location=device)
-            try:
-                model.load_state_dict(checkpoint["model_state_dict"])
-            except RuntimeError as e:
-                # Attempt a non-strict load when shapes differ (e.g., different hidden sizes)
-                logger.warning(
-                    "Could not strictly load checkpoint weights (%s). Trying non-strict load.", e
+            ck_state = checkpoint.get("model_state_dict", checkpoint)
+
+            # Detect GCN hidden dim in checkpoint (compatibility across runs)
+            desired_gcn_hidden = None
+            if "gcn.conv1.lin.weight" in ck_state:
+                desired_gcn_hidden = ck_state["gcn.conv1.lin.weight"].shape[0]
+            elif "gcn.conv1.weight" in ck_state:
+                desired_gcn_hidden = ck_state["gcn.conv1.weight"].shape[0]
+
+            # If checkpoint architecture differs from current model, rebuild model to match
+            if (
+                desired_gcn_hidden is not None
+                and desired_gcn_hidden != cfg.model.n_hidden
+            ):
+                logger.info(
+                    "🔧 Checkpoint GCN hidden=%d differs from cfg.model.n_hidden=%d — rebuilding model to match checkpoint for final eval",
+                    desired_gcn_hidden,
+                    cfg.model.n_hidden,
                 )
-                try:
-                    model.load_state_dict(checkpoint["model_state_dict"], strict=False)
-                    logger.warning("Non-strict state_dict load succeeded; some weights were skipped.")
-                except Exception as e2:
-                    logger.error("Failed to load checkpoint even with strict=False: %s", e2)
+                model = BertGCN(
+                    pretrained_model=cfg.hparams.model_name_or_path,
+                    nb_class=n_classes,
+                    m=cfg.gcn.mix_factor,
+                    gcn_layers=cfg.gcn.gcn_layers,
+                    n_hidden=desired_gcn_hidden,
+                    dropout=cfg.model.dropout,
+                ).to(device)
+
+            # Load model weights only (best-effort). Skip optimizer/scheduler restore
             try:
-                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-            except Exception:
-                logger.warning("Could not restore optimizer state from checkpoint; continuing fresh optimizer.")
-            _safe_load_scheduler_state(
-                scheduler, checkpoint.get("scheduler_state_dict", {}), logger
-            )
+                model.load_state_dict(ck_state)
+            except RuntimeError as e:
+                logger.warning(
+                    "Could not load full state_dict strictly: %s. Trying non-strict load.",
+                    e,
+                )
+                model.load_state_dict(ck_state, strict=False)
+
             logger.info(
                 f"📂 Loaded best checkpoint for final eval (val_acc={checkpoint.get('best_val_acc', 0):.4f})"
             )
@@ -1132,61 +1151,63 @@ def main(cfg: DictConfig) -> float:
         logger.info(f"🎯 Final Test Accuracy: {test_acc:.1%}")
         logger.info("✅ Training completed successfully!")
 
-        # Save final model hierarchically
-        final_model_dir = run_dir / f"final_model_{param_str}"
-        final_model_dir.mkdir(parents=True, exist_ok=True)
+        # Save final model to temp dir and log to MLflow (MLflow as source of truth)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            final_model_dir = Path(temp_dir) / f"final_model_{param_str}_{ts}"
+            final_model_dir.mkdir()
 
-        # Save model state dict
-        torch.save(model.state_dict(), final_model_dir / "pytorch_model.bin")
+            # Save model state dict
+            torch.save(model.state_dict(), final_model_dir / "pytorch_model.bin")
 
-        # Save tokenizer (same as BERT tokenizer used)
-        model.tokenizer.save_pretrained(final_model_dir)
+            # Save tokenizer (same as BERT tokenizer used)
+            model.tokenizer.save_pretrained(final_model_dir)
 
-        # Save model config in transformers format
-        config_dict = {
-            "model_type": "bertgcn",
-            "pretrained_model": cfg.hparams.model_name_or_path,
-            "n_classes": n_classes,
-            "n_features": cfg.model.n_features,
-            "hidden_dim": cfg.gcn.n_hidden,
-            "mix_factor": cfg.gcn.mix_factor,
-            "gcn_layers": cfg.gcn.gcn_layers,
-            "dropout": cfg.model.dropout,
-            "architectures": ["BertGCN"],
-        }
-        with open(final_model_dir / "config.json", "w") as f:
-            import json
+            # Save model config in transformers format
+            config_dict = {
+                "model_type": "bertgcn",
+                "pretrained_model": cfg.hparams.model_name_or_path,
+                "n_classes": n_classes,
+                "n_features": cfg.model.n_features,
+                "hidden_dim": cfg.model.n_hidden,
+                "mix_factor": cfg.gcn.mix_factor,
+                "gcn_layers": cfg.gcn.gcn_layers,
+                "dropout": cfg.model.dropout,
+                "architectures": ["BertGCN"],
+            }
+            with open(final_model_dir / "config.json", "w") as f:
+                import json
 
-            json.dump(config_dict, f, indent=2)
+                json.dump(config_dict, f, indent=2)
 
-        # Save training args for compatibility
-        training_args = {
-            "output_dir": str(final_model_dir),
-            "num_train_epochs": cfg.training.epochs,
-            "per_device_train_batch_size": 64,  # From dataloader
-            "per_device_eval_batch_size": 64,
-            "learning_rate": cfg.training.lr,
-            "weight_decay": 0.01,
-            "adam_beta1": 0.9,
-            "adam_beta2": 0.999,
-            "adam_epsilon": 1e-8,
-            "max_grad_norm": 1.0,
-        }
-        with open(final_model_dir / "training_args.bin", "wb") as f:
-            import pickle
+            # Save training args for compatibility
+            training_args = {
+                "output_dir": str(final_model_dir),
+                "num_train_epochs": cfg.training.epochs,
+                "per_device_train_batch_size": 64,  # From dataloader
+                "per_device_eval_batch_size": 64,
+                "learning_rate": cfg.training.lr,
+                "weight_decay": 0.01,
+                "adam_beta1": 0.9,
+                "adam_beta2": 0.999,
+                "adam_epsilon": 1e-8,
+                "max_grad_norm": 1.0,
+            }
+            with open(final_model_dir / "training_args.bin", "wb") as f:
+                import pickle
 
-            pickle.dump(training_args, f)
+                pickle.dump(training_args, f)
 
-        logger.info(f"💾 Final BertGCN model saved to: {final_model_dir}")
-        try:
-            mlflow.log_artifacts(str(final_model_dir), artifact_path="final_model")
-        except Exception:
-            # Best-effort: if artifacts cannot be logged, continue silently
-            pass
+            # Log to MLflow (source of truth)
+            try:
+                mlflow.log_artifacts(str(final_model_dir), artifact_path="final_model")
+            except Exception as e:
+                logger.warning(f"Failed to log model to MLflow: {e}")
+
+        logger.info(f"💾 Final BertGCN model logged to MLflow (artifact: final_model)")
 
         # Log comprehensive training summary
-        mlruns_path = str(project_root / "outputs" / "train_gcn" / "mlruns")
-        _log_gcn_training_summary(test_acc, final_model_dir, mlruns_path, logger)
+        mlruns_path = str(project_root / "outputs" / "gcn" / "mlruns")
+        _log_gcn_training_summary(test_acc, mlruns_path, logger)
 
         return test_acc
 

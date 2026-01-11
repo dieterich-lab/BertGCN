@@ -18,6 +18,7 @@ from __future__ import annotations
 import inspect
 import subprocess
 import sys
+import tempfile
 import warnings
 from collections import Counter
 from datetime import datetime
@@ -172,18 +173,14 @@ def _log_training_summary(cfg, val_metrics, test_metrics, final_dir, mlruns_path
     )
     summary_lines.append("")
     summary_lines.append("💾 MODEL ARTIFACTS:")
-    summary_lines.append(f"   • Final model saved to: {final_dir}")
+    summary_lines.append(f"   • Final model logged to MLflow (artifact: final_model)")
     summary_lines.append(f"   • MLflow experiments:   {mlruns_path}")
     summary_lines.append("")
     summary_lines.append("🚀 NEXT STEPS:")
     summary_lines.append(
         f"   • View MLflow UI: mlflow ui --backend-store-uri {mlruns_path}"
     )
-    summary_lines.append(
-        "   • Load model: AutoModelForSequenceClassification.from_pretrained('{}')".format(
-            final_dir
-        )
-    )
+    summary_lines.append("   • Load model: Download from MLflow artifact 'final_model'")
 
     # Create a special log record for highlighting
     import logging
@@ -550,7 +547,8 @@ def main(cfg: DictConfig):
 
     if not hydra_run_dir or "None" in str(hydra_run_dir):
         ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        job = getattr(cfg, "mode", None) or "train_bert"
+        job = getattr(cfg, "mode", None)
+        job = job if job and job != "None" else "bert"
         hydra_run_dir = project_root / "outputs" / job / ts
 
     out_dir = Path(hydra_run_dir)
@@ -851,20 +849,21 @@ def main(cfg: DictConfig):
         # Respect cfg.hparams.keep_local_copy if present
         keep_local = getattr(cfg.hparams, "keep_local_copy", False)
 
-        # Final model persistence policy: always save a consolidated copy to
-        # outputs/train_bert/final_model. This decouples long-term artifact from
-        # the transient hydra run directory.
-        final_dir = project_root / "outputs" / "train_bert" / "final_model"
-        final_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            trainer.save_model(str(final_dir))
-            tokenizer.save_pretrained(str(final_dir))
-            # Save label encoder
-            le_path = final_dir / "label_encoder.joblib"
-            joblib.dump(le, le_path)
-            logger.info(f"💾 Final model saved to: {final_dir}")
-        except Exception as e:
-            logger.warning(f"⚠️  Could not save final model copy to {final_dir}: {e}")
+        # Save final model to temp dir and log to MLflow (MLflow as source of truth)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            final_dir = Path(temp_dir) / f"final_model_{param_str}"
+            final_dir.mkdir()
+            try:
+                trainer.save_model(str(final_dir))
+                tokenizer.save_pretrained(str(final_dir))
+                # Save label encoder
+                le_path = final_dir / "label_encoder.joblib"
+                joblib.dump(le, le_path)
+                # Log to MLflow
+                mlflow.log_artifacts(str(final_dir), artifact_path="final_model")
+                logger.info(f"💾 Final model logged to MLflow (artifact: final_model)")
+            except Exception as e:
+                logger.warning(f"⚠️  Could not log final model to MLflow: {e}")
 
         # Log final model artifacts to MLflow (best-effort)
         try:
@@ -873,7 +872,7 @@ def main(cfg: DictConfig):
             pass
 
         # Log comprehensive training summary
-        mlruns_path = str(project_root / "outputs" / "train_bert" / "mlruns")
+        mlruns_path = str(project_root / "outputs" / cfg.mode / "mlruns")
         _log_training_summary(cfg, val_metrics, test_metrics, final_dir, mlruns_path)
 
     return 0
