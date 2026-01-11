@@ -216,9 +216,9 @@ outputs/
 hydra/
 └── gcn/
     └── <timestamp>/          # e.g., 2026-01-11_12-00-00/
-        ├── checkpoints_lr1.0e-05_drop0.5_m0.5_zero1/
+        ├── checkpoints_m0.25/  # Best checkpoint (param-organized)
         │   └── best_checkpoint.pt
-        ├── final_model_lr1.0e-05_drop0.5_m0.5_zero1/
+        ├── final_model_m0.25/  # Final saved model
         │   ├── pytorch_model.bin
         │   ├── config.json
         │   └── tokenizer/
@@ -228,14 +228,11 @@ hydra/
 
 ### Naming Convention
 
-Model directories include key parameters: `lr{learning_rate}_drop{dropout}_m{mix_factor}_zero{zero_word_features}`
+Model directories include key varying parameters: `m{mix_factor}` (e.g., `m0.25`, `m0.5`, `m0.75`)
 
-- `lr`: Learning rate (scientific notation)
-- `drop`: Dropout rate
-- `m`: GCN mix factor
-- `zero`: Zero word features flag
+- `m`: GCN mix factor (BERT-GCN blend weight)
 
-This makes it easy to identify models without checking configs.
+This keeps names concise while differentiating runs by the swept parameter.
 
 ### For Sweeps
 
