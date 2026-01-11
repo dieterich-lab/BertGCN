@@ -726,7 +726,7 @@ def main(cfg: DictConfig) -> float:
     logger.info(f"🖥️  Using device: {device}")
 
     # Organize runs by hyperparameters for better model management
-    param_str = f"lr{cfg.hparams.learning_rate:.1e}_drop{cfg.hparams.dropout}_m{cfg.gcn.mix_factor}_zero{int(cfg.gcn.zero_word_features)}"
+    param_str = f"m{cfg.gcn.mix_factor}"
 
     freeze_features_after_init = bool(
         getattr(cfg, "freeze_features_after_init", False)
