@@ -1083,10 +1083,24 @@ def main(cfg: DictConfig) -> float:
         # Load best checkpoint (val accuracy) before final test
         if best_checkpoint.exists():
             checkpoint = torch.load(best_checkpoint, map_location=device)
-            model.load_state_dict(checkpoint["model_state_dict"])
-            optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            try:
+                model.load_state_dict(checkpoint["model_state_dict"])
+            except RuntimeError as e:
+                # Attempt a non-strict load when shapes differ (e.g., different hidden sizes)
+                logger.warning(
+                    "Could not strictly load checkpoint weights (%s). Trying non-strict load.", e
+                )
+                try:
+                    model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+                    logger.warning("Non-strict state_dict load succeeded; some weights were skipped.")
+                except Exception as e2:
+                    logger.error("Failed to load checkpoint even with strict=False: %s", e2)
+            try:
+                optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+            except Exception:
+                logger.warning("Could not restore optimizer state from checkpoint; continuing fresh optimizer.")
             _safe_load_scheduler_state(
-                scheduler, checkpoint["scheduler_state_dict"], logger
+                scheduler, checkpoint.get("scheduler_state_dict", {}), logger
             )
             logger.info(
                 f"📂 Loaded best checkpoint for final eval (val_acc={checkpoint.get('best_val_acc', 0):.4f})"
