@@ -890,7 +890,7 @@ def main(cfg: DictConfig) -> float:
         checkpoint_dir = run_dir / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-        best_val_acc = 0.0
+        best_val_acc = float('inf')
         start_epoch = 0
         best_checkpoint = checkpoint_dir / "best_checkpoint.pt"
         patience = int(getattr(cfg.training, "early_stopping_patience", 0) or 0)
