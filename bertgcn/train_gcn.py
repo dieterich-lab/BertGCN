@@ -44,6 +44,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 from datasets import Dataset, load_from_disk
 from hydra.utils import get_original_cwd
+from hydra.core.hydra_config import HydraConfig
+from datetime import datetime
+import subprocess
 from omegaconf import DictConfig, OmegaConf
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import DataLoader, TensorDataset
@@ -741,17 +744,57 @@ def main(cfg: DictConfig) -> float:
         )
         return tb.main.__wrapped__(cfg)
 
-    # Setup MLflow to write inside outputs/train_gcn (default if unset)
+    # Resolve a deterministic Hydra run dir; fall back to outputs/<mode>/<timestamp>
+    try:
+        hydra_cfg = HydraConfig.get()
+        hydra_run_dir = Path(hydra_cfg.runtime.output_dir)
+    except Exception:
+        hydra_run_dir = None
+
+    if not hydra_run_dir or "None" in str(hydra_run_dir):
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        job = getattr(cfg, "mode", None) or "train_gcn"
+        hydra_run_dir = project_root / "outputs" / job / ts
+
+    run_dir = hydra_run_dir
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save resolved config for reproducibility
+    try:
+        OmegaConf.save(cfg, run_dir / "cfg.yaml")
+    except Exception:
+        pass
+
+    # Setup MLflow tracking under outputs/<job>/mlruns
     default_mlflow_uri = f"file:{project_root / 'outputs' / 'train_gcn' / 'mlruns'}"
     tracking_uri = cfg.get("mlflow_tracking_uri") or default_mlflow_uri
-    Path(tracking_uri.replace("file:", "")).mkdir(parents=True, exist_ok=True)
+    Path(str(tracking_uri).replace("file:", "")).mkdir(parents=True, exist_ok=True)
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(cfg.mlflow_experiment_name)
     if hasattr(mlflow, "log_system_metrics"):
         mlflow.log_system_metrics(True)
-    with mlflow.start_run():
+
+    # Try to get short git sha for tagging
+    try:
+        git_sha = (
+            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=str(project_root))
+            .decode()
+            .strip()
+        )
+    except Exception:
+        git_sha = "unknown"
+
+    with mlflow.start_run(run_name=run_dir.name):
         # Log parameters
+        mlflow.set_tag("hydra_run_dir", str(run_dir))
+        mlflow.set_tag("git_sha", git_sha)
+        mlflow.set_tag("mode", str(getattr(cfg, "mode", "train_gcn")))
         mlflow.log_params(OmegaConf.to_container(cfg, resolve=True))
+        # Save resolved config into MLflow artifacts for reproducibility
+        try:
+            mlflow.log_artifact(str(run_dir / "cfg.yaml"), artifact_path="config")
+        except Exception:
+            pass
 
         # Load real processed dataset
         logger.info("Loading processed dataset...")
@@ -884,11 +927,7 @@ def main(cfg: DictConfig) -> float:
                     "Skipping scheduler state restore due to mismatch: %s", exc
                 )
 
-        # Resolve run directory; fall back when hydra metadata is missing
-        run_dir = Path(
-            OmegaConf.select(cfg, "hydra.run.dir", default="outputs/train_gcn/debug")
-        )
-
+        # `run_dir` was resolved earlier (Hydra or outputs/<job>/<timestamp>).
         # Setup checkpoint directory (per run to avoid clashes across jobs), organized by params
         checkpoint_dir = run_dir / f"checkpoints_{param_str}"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -1123,7 +1162,11 @@ def main(cfg: DictConfig) -> float:
             pickle.dump(training_args, f)
 
         logger.info(f"💾 Final BertGCN model saved to: {final_model_dir}")
-        mlflow.log_artifact(str(final_model_dir), artifact_path="final_model")
+        try:
+            mlflow.log_artifacts(str(final_model_dir), artifact_path="final_model")
+        except Exception:
+            # Best-effort: if artifacts cannot be logged, continue silently
+            pass
 
         # Log comprehensive training summary
         mlruns_path = str(project_root / "outputs" / "train_gcn" / "mlruns")

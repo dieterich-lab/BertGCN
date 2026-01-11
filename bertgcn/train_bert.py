@@ -31,6 +31,9 @@ from datasets import Dataset, load_from_disk
 from hydra.core.hydra_config import HydraConfig
 from hydra.utils import get_original_cwd
 from omegaconf import DictConfig, OmegaConf
+from hydra.core.hydra_config import HydraConfig
+from datetime import datetime
+import subprocess
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Subset
 from transformers import (
@@ -538,18 +541,36 @@ def main(cfg: DictConfig):
         project_root = Path(get_original_cwd())
     except Exception:
         project_root = Path.cwd()
-    # Prefer explicit config URI; otherwise fall back to project-local mlruns.
+
+    # Resolve Hydra run dir robustly; when missing, place runs under outputs/<job>/<timestamp>
+    try:
+        hydra_cfg = HydraConfig.get()
+        hydra_run_dir = Path(hydra_cfg.runtime.output_dir)
+    except Exception:
+        hydra_run_dir = None
+
+    if not hydra_run_dir or "None" in str(hydra_run_dir):
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        job = getattr(cfg, "mode", None) or "train_bert"
+        hydra_run_dir = project_root / "outputs" / job / ts
+
+    out_dir = Path(hydra_run_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # Persist resolved config inside the run dir for reproducibility
+    try:
+        OmegaConf.save(cfg, out_dir / "cfg.yaml")
+    except Exception:
+        pass
+
+    # Prefer explicit config URI; otherwise use outputs/train_bert/mlruns to avoid repo root clutter
     if cfg.get("mlflow_tracking_uri"):
         mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
         logger.info(f"Using configured MLflow tracking URI: {cfg.mlflow_tracking_uri}")
     else:
-        current_uri = mlflow.get_tracking_uri()
-        if current_uri and current_uri != "file:./mlruns":
-            tracking_uri = current_uri
-            logger.info(f"Using existing MLflow tracking URI: {tracking_uri}")
-        else:
-            tracking_uri = project_root / "mlruns"
-            mlflow.set_tracking_uri(str(tracking_uri))
+        default_uri = f"file:{project_root / 'outputs' / 'train_bert' / 'mlruns'}"
+        mlflow.set_tracking_uri(default_uri)
+        logger.info(f"Using outputs-local MLflow tracking URI: {default_uri}")
     mlflow.set_experiment(cfg.mlflow_experiment_name)
     # Enable MLflow autologging for transformers (fallback to pytorch). This
     # helps capture parameters, metrics and artifacts automatically when
@@ -574,28 +595,7 @@ def main(cfg: DictConfig):
         except Exception:
             logger.info("ℹ️  MLflow autolog not available; using manual logging")
 
-    # Get hydra run directory.
-    try:
-        # Primary method: get from Hydra's runtime. This is the most reliable way.
-        hydra_cfg = HydraConfig.get()
-        hydra_run_dir = hydra_cfg.runtime.output_dir
-        logger.info(f"📁 Hydra run directory: {hydra_run_dir}")
-    except ValueError:
-        # Fallback for tests or when running without full Hydra context.
-        logger.warning(
-            "Could not get Hydra run directory from runtime. "
-            "Falling back to config. This is normal during testing."
-        )
-        hydra_run_dir = OmegaConf.select(cfg, "hydra.run.dir")
-
-    if hydra_run_dir is None:
-        raise ValueError(
-            "hydra.run.dir could not be determined. "
-            "Ensure you are running with Hydra and 'hydra.run.dir' is set in your config."
-        )
-
-    out_dir = Path(hydra_run_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"📁 Hydra run directory: {out_dir}")
     logger.info(f"🔗 MLflow tracking URI: {mlflow.get_tracking_uri()}")
 
     dataset, le = load_processed_dataset(cfg)
@@ -612,15 +612,24 @@ def main(cfg: DictConfig):
     model.config.id2label = {i: lab for i, lab in enumerate(le.classes_)}
     model.config.label2id = {lab: i for i, lab in enumerate(le.classes_)}
 
-    with mlflow.start_run():
-        # Tag run with hydra run directory & script name for traceability
+    # Tag run and start MLflow run with deterministic run_name
+    try:
+        git_sha = (
+            subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=str(project_root))
+            .decode()
+            .strip()
+        )
+    except Exception:
+        git_sha = "unknown"
+
+    with mlflow.start_run(run_name=out_dir.name):
         try:
-            mlflow.set_tags(
-                {
-                    "hydra_run_dir": str(out_dir),
-                    "entry_script": "finetune_bert",
-                }
-            )
+            mlflow.set_tags({"hydra_run_dir": str(out_dir), "entry_script": "finetune_bert", "git_sha": git_sha})
+        except Exception:
+            pass
+        # Log resolved config for reproducibility
+        try:
+            mlflow.log_artifact(str(out_dir / "cfg.yaml"), artifact_path="config")
         except Exception:
             pass
         # Create the Trainer inside the active MLflow run so autolog captures
@@ -849,6 +858,12 @@ def main(cfg: DictConfig):
             logger.info(f"💾 Final model saved to: {final_dir}")
         except Exception as e:
             logger.warning(f"⚠️  Could not save final model copy to {final_dir}: {e}")
+
+        # Log final model artifacts to MLflow (best-effort)
+        try:
+            mlflow.log_artifacts(str(final_dir), artifact_path="final_model")
+        except Exception:
+            pass
 
         # Log comprehensive training summary
         mlruns_path = str(project_root / "outputs" / "train_bert" / "mlruns")

@@ -213,17 +213,17 @@ outputs/
 └── train_gcn/
     └── mlruns/               # MLflow tracking
 
-hydra/
-└── gcn/
-    └── <timestamp>/          # e.g., 2026-01-11_12-00-00/
-        ├── checkpoints_m0.25/  # Best checkpoint (param-organized)
-        │   └── best_checkpoint.pt
-        ├── final_model_m0.25/  # Final saved model
-        │   ├── pytorch_model.bin
-        │   ├── config.json
-        │   └── tokenizer/
-        ├── config.yaml        # Full resolved config
-        └── overrides.yaml     # Runtime overrides
+outputs/
+└── train_gcn/
+   └── <timestamp>/          # e.g., 2026-01-11_12-00-00/
+      ├── checkpoints_m0.25/  # Best checkpoint (param-organized)
+      │   └── best_checkpoint.pt
+      ├── final_model_m0.25/  # Final saved model
+      │   ├── pytorch_model.bin
+      │   ├── config.json
+      │   └── tokenizer/
+      ├── cfg.yaml           # Full resolved config
+      └── overrides.yaml     # Runtime overrides
 ```
 
 ### Naming Convention
