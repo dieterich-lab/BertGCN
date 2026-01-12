@@ -19,6 +19,7 @@ import inspect
 import subprocess
 import sys
 import tempfile
+from tempfile import TemporaryDirectory
 import warnings
 from collections import Counter
 from datetime import datetime
@@ -851,7 +852,7 @@ def main(cfg: DictConfig):
 
         # Save final model to temp dir and log to MLflow (MLflow as source of truth)
         final_dir = None
-        with tempfile.TemporaryDirectory() as temp_dir:
+        with TemporaryDirectory() as temp_dir:
             final_dir = Path(temp_dir) / f"final_model_{param_str}"
             final_dir.mkdir()
             try:
