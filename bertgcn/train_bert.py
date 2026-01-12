@@ -850,6 +850,7 @@ def main(cfg: DictConfig):
         keep_local = getattr(cfg.hparams, "keep_local_copy", False)
 
         # Save final model to temp dir and log to MLflow (MLflow as source of truth)
+        final_dir = None
         with tempfile.TemporaryDirectory() as temp_dir:
             final_dir = Path(temp_dir) / f"final_model_{param_str}"
             final_dir.mkdir()
@@ -864,12 +865,6 @@ def main(cfg: DictConfig):
                 logger.info(f"💾 Final model logged to MLflow (artifact: final_model)")
             except Exception as e:
                 logger.warning(f"⚠️  Could not log final model to MLflow: {e}")
-
-        # Log final model artifacts to MLflow (best-effort)
-        try:
-            mlflow.log_artifacts(str(final_dir), artifact_path="final_model")
-        except Exception:
-            pass
 
         # Log comprehensive training summary
         mlruns_path = str(project_root / "outputs" / cfg.mode / "mlruns")
