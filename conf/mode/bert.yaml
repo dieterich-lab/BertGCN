@@ -7,13 +7,13 @@ mode: bert
 mlflow_experiment_name: "bertgcn_finetuning"
 
 # Override MLflow tracking URI for BERT
-mlflow_tracking_uri: "file:/home/pwiesenbach/BertGCN/outputs/bert/mlruns"
+mlflow_tracking_uri: "file:/beegfs/homes/pwiesenbach/BertGCN/outputs/bert/mlruns"
 
 hydra:
   run:
-    dir: outputs/bert/hydra/${now:%Y-%m-%d_%H-%M-%S}
+    dir: /beegfs/homes/pwiesenbach/BertGCN/outputs/bert/hydra/${now:%Y-%m-%d_%H-%M-%S}
   sweep:
-    dir: outputs/bert/multirun/${now:%Y-%m-%d_%H-%M-%S}
+    dir: /beegfs/homes/pwiesenbach/BertGCN/outputs/bert/multirun/${now:%Y-%m-%d_%H-%M-%S}
 
 # BERT hyperparameters (needed for finetuning)
 hparams:
