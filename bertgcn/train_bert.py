@@ -851,6 +851,7 @@ def main(cfg: DictConfig):
         keep_local = getattr(cfg.hparams, "keep_local_copy", False)
 
         # Save final model to temp dir and log to MLflow (MLflow as source of truth)
+        param_str = datetime.now().strftime("%Y%m%d_%H%M%S")
         final_dir = None
         with TemporaryDirectory() as temp_dir:
             final_dir = Path(temp_dir) / f"final_model_{param_str}"
