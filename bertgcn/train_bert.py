@@ -560,12 +560,12 @@ def main(cfg: DictConfig):
     except Exception:
         pass
 
-    # Prefer explicit config URI; otherwise use outputs/train_bert/mlruns to avoid repo root clutter
+    # Prefer explicit config URI; otherwise use outputs/bert/mlruns to avoid repo root clutter
     if cfg.get("mlflow_tracking_uri"):
         mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
         logger.info(f"Using configured MLflow tracking URI: {cfg.mlflow_tracking_uri}")
     else:
-        default_uri = f"file:{project_root / 'outputs' / 'train_bert' / 'mlruns'}"
+        default_uri = f"file:{project_root / 'outputs' / 'bert' / 'mlruns'}"
         mlflow.set_tracking_uri(default_uri)
         logger.info(f"Using outputs-local MLflow tracking URI: {default_uri}")
     mlflow.set_experiment(cfg.mlflow_experiment_name)
