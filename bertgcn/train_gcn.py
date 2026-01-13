@@ -744,6 +744,8 @@ def main(cfg: DictConfig) -> float:
         return tb.main.__wrapped__(cfg)
 
     # Resolve a deterministic Hydra run dir; fall back to outputs/<mode>/<timestamp>
+    # Ensure a timestamp is always available for naming final artifacts.
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     try:
         hydra_cfg = HydraConfig.get()
         hydra_run_dir = Path(hydra_cfg.runtime.output_dir)
@@ -751,10 +753,18 @@ def main(cfg: DictConfig) -> float:
         hydra_run_dir = None
 
     if not hydra_run_dir or "None" in str(hydra_run_dir):
-        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         job = getattr(cfg, "mode", None)
         job = job if job and job != "None" else "gcn"
         hydra_run_dir = project_root / "outputs" / job / ts
+    else:
+        # If Hydra provided an output dir, attempt to extract a sensible timestamp
+        # segment for artifact naming; fall back to the generated `ts` above.
+        try:
+            extracted = Path(hydra_run_dir).name
+            if extracted:
+                ts = extracted
+        except Exception:
+            pass
 
     run_dir = hydra_run_dir
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -765,8 +775,9 @@ def main(cfg: DictConfig) -> float:
     except Exception:
         pass
 
-    # Setup MLflow tracking under outputs/<job>/mlruns
-    default_mlflow_uri = f"file:{project_root / 'outputs' / 'gcn' / 'mlruns'}"
+    # Setup MLflow tracking under outputs/<job>/mlruns (use resolved `job`)
+    job = locals().get("job", getattr(cfg, "mode", None) or "gcn")
+    default_mlflow_uri = f"file:{project_root / 'outputs' / job / 'mlruns'}"
     tracking_uri = cfg.get("mlflow_tracking_uri") or default_mlflow_uri
     Path(str(tracking_uri).replace("file:", "")).mkdir(parents=True, exist_ok=True)
     mlflow.set_tracking_uri(tracking_uri)
@@ -1153,7 +1164,9 @@ def main(cfg: DictConfig) -> float:
 
         # Save final model to temp dir and log to MLflow (MLflow as source of truth)
         with tempfile.TemporaryDirectory() as temp_dir:
-            final_model_dir = Path(temp_dir) / f"final_model_{param_str}_{ts}"
+            # Ensure we have a timestamp even if `ts` was not set for some control flows
+            safe_ts = locals().get("ts") or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            final_model_dir = Path(temp_dir) / f"final_model_{param_str}_{safe_ts}"
             final_model_dir.mkdir()
 
             # Save model state dict

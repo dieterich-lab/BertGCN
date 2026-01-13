@@ -19,11 +19,11 @@ import inspect
 import subprocess
 import sys
 import tempfile
-from tempfile import TemporaryDirectory
 import warnings
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Dict, Tuple
 
 import hydra
@@ -98,6 +98,9 @@ def _get_logger():
     # Remove any existing handlers
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
+
+    # Prevent propagation to root logger to avoid duplicate logs
+    logger.propagate = False
 
     # Add console handler with colored formatting
     # Emit logs to stdout so Slurm captures them in *.log files, not *.err.
@@ -561,12 +564,13 @@ def main(cfg: DictConfig):
     except Exception:
         pass
 
-    # Prefer explicit config URI; otherwise use outputs/bert/mlruns to avoid repo root clutter
+    # Prefer explicit config URI; otherwise use outputs/<job>/mlruns to avoid repo root clutter
+    job = locals().get("job", getattr(cfg, "mode", None) or "bert")
     if cfg.get("mlflow_tracking_uri"):
         mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
         logger.info(f"Using configured MLflow tracking URI: {cfg.mlflow_tracking_uri}")
     else:
-        default_uri = f"file:{project_root / 'outputs' / 'bert' / 'mlruns'}"
+        default_uri = f"file:{project_root / 'outputs' / job / 'mlruns'}"
         mlflow.set_tracking_uri(default_uri)
         logger.info(f"Using outputs-local MLflow tracking URI: {default_uri}")
     mlflow.set_experiment(cfg.mlflow_experiment_name)
