@@ -64,7 +64,7 @@ poetry run predict
 poetry run interpret-docs-shap
 ```
 
-All outputs are organized in `outputs/bert/` and `outputs/gcn/` directories. View experiments in MLflow UI.
+Models are saved in `outputs/`, Hydra configs in `hydra/`, and experiments tracked in `mlruns/`. View all experiments in the single MLflow UI.
 
 ---
 
@@ -87,13 +87,14 @@ BertGCN follows a sequential pipeline:
    - Trains plain BERT for document classification as baseline
    - Uses Hydra config from `conf/config.yaml`
    - Outputs model to `outputs/bert/final_model`
-   - Logs to MLflow in `outputs/bert/mlruns`
+   - Logs to MLflow in the canonical `mlruns` store (experiment: bertgcn_finetuning)
 
 ### 4. **Train BertGCN** (`poetry run train-bertgcn`)
    - Trains the full BertGCN ensemble (BERT + GCN)
    - Supports hyperparameter sweeps via Optuna
-   - Organizes models by hyperparameters in `outputs/gcn/hydra/<timestamp>/` (single runs) or `outputs/gcn/multirun/<timestamp>/` (sweeps)
-   - Logs experiments to MLflow in `outputs/gcn/mlruns`
+   - Saves models to `outputs/gcn/final_model`
+   - Logs Hydra configs to `hydra/gcn/runs/<timestamp>/` (single runs) or `hydra/gcn/sweeps/<timestamp>/` (sweeps)
+   - Logs experiments to MLflow in the canonical `mlruns` store (experiment: bertgcn_training)
 
 ### 5. **Predict** (`poetry run predict`)
    - Runs inference on new data using trained models
@@ -129,6 +130,8 @@ poetry run train-bertgcn gcn.mix_factor=0.7 gcn.zero_word_features=true
 # Adjust training
 poetry run train-bertgcn training.epochs=50 training.batch_size=32
 ```
+
+**Note:** Hydra run directories are fixed in SLURM scripts for canonical organization (not adjustable in configs).
 
 ### Custom Configs
 
@@ -181,11 +184,11 @@ poetry run train-bertgcn --multirun \
 
 - Each combination runs as a separate job
 - Results logged to MLflow for comparison
-- Models saved in organized directories
+- Hydra configs saved in `hydra/gcn/sweeps/<timestamp>/`, models in `outputs/gcn/`
 
 ### SLURM Integration
 
-For cluster jobs, use the provided scripts in `slurm/`:
+For cluster jobs, use the provided scripts in `slurm/` (GPU-supported, with canonical MLflow/Hydra paths):
 
 ```bash
 # Submit BERT training
@@ -201,21 +204,30 @@ Scripts handle GPU allocation and environment setup.
 
 ## 📂 Model Organization
 
-Models are automatically organized by hyperparameters for easy retrieval:
+Models are saved in `outputs/` directories, Hydra configs in `hydra/`, and experiments tracked in `mlruns/`:
 
 ### Directory Structure
 
 ```
 outputs/
 ├── bert/
-│   ├── final_model/          # BERT baseline model
-│   ├── hydra/<timestamp>/    # Hydra logs for single runs
-│   └── mlruns/               # MLflow tracking
+│   └── final_model/          # BERT baseline model
 └── gcn/
-    ├── hydra/<timestamp>/    # Hydra logs for single runs
-    ├── multirun/<timestamp>/ # Hydra logs for sweeps
-    ├── final_model/          # Best model (if applicable)
-    └── mlruns/               # MLflow tracking
+    ├── final_model/          # Best GCN model
+    ├── interpret/            # Document-level interpretability outputs
+    └── multirun/<timestamp>/ # Legacy Hydra logs for sweeps (to be migrated)
+
+hydra/
+├── bert/
+│   └── runs/<timestamp>/     # Hydra logs for BERT single runs
+└── gcn/
+    ├── runs/<timestamp>/     # Hydra logs for GCN single runs
+    └── sweeps/<timestamp>/   # Hydra logs for GCN sweeps
+
+mlruns/
+├── 1/                        # bertgcn_finetuning (BERT experiments)
+├── 2/                        # bertgcn_training (GCN experiments)
+└── ...                       # Other experiments
 ```
 
 ### Naming Convention
@@ -228,30 +240,45 @@ This keeps names concise while differentiating runs by the swept parameter.
 
 ### For Sweeps
 
-Each sweep job creates its own `<timestamp>/` directory under `multirun/` with parameter-specific subdirs.
+Each sweep job creates its own `<timestamp>/` directory under `hydra/gcn/sweeps/` with parameter-specific subdirs.
 
 ---
 
 ## 📈 MLflow Tracking
 
-MLflow automatically tracks all experiments:
+All experiments are tracked in a single canonical MLflow store at `mlruns/` in the project root:
 
 ```bash
-# View GCN experiments
-poetry run mlflow ui --backend-store-uri outputs/gcn/mlruns
+# View all experiments (BERT and GCN)
+poetry run mlflow ui --backend-store-uri mlruns
+```
 
-# View BERT experiments
-poetry run mlflow ui --backend-store-uri outputs/bert/mlruns
+### Store Layout
+
+```
+mlruns/
+├── 0/                          # Default experiment (.trash)
+├── 1/                          # bertgcn_finetuning (BERT experiments)
+│   ├── <run_id>/
+│   │   ├── artifacts/          # Models, configs, metrics
+│   │   ├── meta.yaml           # Run metadata
+│   │   ├── params/             # Logged parameters
+│   │   └── tags/               # Run tags
+└── 2/                          # bertgcn_training (GCN experiments)
+    ├── <run_id>/
+    │   ├── artifacts/
+    │   ├── meta.yaml
+    │   └── ...
 ```
 
 ### What Gets Logged
 
-- **Parameters**: All config values
-- **Metrics**: Training/validation loss, accuracy, F1, precision, recall
-- **Artifacts**: Final models, config files
-- **Tags**: Experiment metadata
+- **Parameters**: All Hydra config values (hparams, gcn, dataset, etc.)
+- **Metrics**: Training/validation loss, accuracy, F1, precision, recall per epoch
+- **Artifacts**: Final models, label encoders, config files
+- **Tags**: Experiment type, timestamp, hyperparameters summary
 
-Compare runs, download models, and analyze performance across hyperparameters.
+Compare runs across BERT and GCN experiments, download models, and analyze performance.
 
 ---
 

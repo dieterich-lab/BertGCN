@@ -19,15 +19,6 @@ dev: false
 # MLflow experiment name for GCN training
 mlflow_experiment_name: "minimal_gcn_training"
 
-# Override MLflow tracking URI for GCN
-mlflow_tracking_uri: "file:/beegfs/homes/pwiesenbach/BertGCN/outputs/gcn/mlruns"
-
-# Hydra run directory
-hydra:
-  run:
-    dir: /beegfs/homes/pwiesenbach/BertGCN/outputs/gcn/hydra/${now:%Y-%m-%d_%H-%M-%S}
-  sweep:
-    dir: /beegfs/homes/pwiesenbach/BertGCN/outputs/gcn/multirun/${now:%Y-%m-%d_%H-%M-%S}
 hparams:
   model_name_or_path: "/prj/doctoral_letters/PETGUI/med_bert_local"
 

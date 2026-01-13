@@ -775,10 +775,14 @@ def main(cfg: DictConfig) -> float:
     except Exception:
         pass
 
-    # Setup MLflow tracking under outputs/<job>/mlruns (use resolved `job`)
+    # Setup MLflow tracking. Prefer env var or config, otherwise enforce a
+    # canonical project-local mlruns path (hardcoded here so it is not a
+    # hyperparameter). This keeps all experiments in one store.
     job = locals().get("job", getattr(cfg, "mode", None) or "gcn")
-    default_mlflow_uri = f"file:{project_root / 'outputs' / job / 'mlruns'}"
-    tracking_uri = cfg.get("mlflow_tracking_uri") or default_mlflow_uri
+    env_uri = os.environ.get("MLFLOW_TRACKING_URI")
+    canonical_dir = project_root / "mlruns"
+    canonical_uri = f"file:{canonical_dir}"
+    tracking_uri = env_uri or cfg.get("mlflow_tracking_uri") or canonical_uri
     Path(str(tracking_uri).replace("file:", "")).mkdir(parents=True, exist_ok=True)
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment(cfg.mlflow_experiment_name)
@@ -801,7 +805,7 @@ def main(cfg: DictConfig) -> float:
         # Log parameters
         mlflow.set_tag("hydra_run_dir", str(run_dir))
         mlflow.set_tag("git_sha", git_sha)
-        mlflow.set_tag("mode", str(getattr(cfg, "mode", "train_gcn")))
+        mlflow.set_tag("mode", str(getattr(cfg, "mode", "gcn")))
         mlflow.log_params(OmegaConf.to_container(cfg, resolve=True))
         # Save resolved config into MLflow artifacts for reproducibility
         try:

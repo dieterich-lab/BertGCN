@@ -16,6 +16,7 @@ Edit CONFIG SECTION to adjust hyperparameters.
 from __future__ import annotations
 
 import inspect
+import os
 import subprocess
 import sys
 import tempfile
@@ -564,15 +565,26 @@ def main(cfg: DictConfig):
     except Exception:
         pass
 
-    # Prefer explicit config URI; otherwise use outputs/<job>/mlruns to avoid repo root clutter
+    # Prefer environment var, then explicit config URI, otherwise use a
+    # canonical project-local mlruns path (hardcoded here to avoid making it
+    # a hyperparameter). This ensures a single tracking store for all jobs.
     job = locals().get("job", getattr(cfg, "mode", None) or "bert")
-    if cfg.get("mlflow_tracking_uri"):
+    env_uri = os.environ.get("MLFLOW_TRACKING_URI")
+    canonical_dir = project_root / "mlruns"
+    canonical_uri = f"file:{canonical_dir}"
+    if env_uri:
+        mlflow.set_tracking_uri(env_uri)
+        logger.info(
+            f"Using MLflow tracking URI from MLFLOW_TRACKING_URI env: {env_uri}"
+        )
+    elif cfg.get("mlflow_tracking_uri"):
         mlflow.set_tracking_uri(cfg.mlflow_tracking_uri)
         logger.info(f"Using configured MLflow tracking URI: {cfg.mlflow_tracking_uri}")
     else:
-        default_uri = f"file:{project_root / 'outputs' / job / 'mlruns'}"
-        mlflow.set_tracking_uri(default_uri)
-        logger.info(f"Using outputs-local MLflow tracking URI: {default_uri}")
+        # Enforce the canonical mlruns location inside the project root.
+        canonical_dir.mkdir(parents=True, exist_ok=True)
+        mlflow.set_tracking_uri(canonical_uri)
+        logger.info(f"Using canonical MLflow tracking URI: {canonical_uri}")
     mlflow.set_experiment(cfg.mlflow_experiment_name)
     # Enable MLflow autologging for transformers (fallback to pytorch). This
     # helps capture parameters, metrics and artifacts automatically when

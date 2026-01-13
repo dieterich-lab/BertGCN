@@ -8,7 +8,7 @@ ranking.
 Usage:
     poetry run python -m bertgcn.interpret_docs_ig
 Output:
-    outputs/train_gcn/interpret/document_influence_ig.csv
+    outputs/gcn/interpret/document_influence_ig.csv
 Config:
     interpretation.top_k (default 5), interpretation.max_docs (optional)
 """
@@ -25,7 +25,7 @@ from bertgcn.train_gcn import BertGCN, load_graph_data_from_disk, load_processed
 
 
 def _resolve_model_dir(cfg: DictConfig) -> Path:
-    """Pick model_dir in priority: cfg.interpretation.model_dir -> newest outputs/train_gcn/**/final_model -> models/final_model."""
+    """Pick model_dir in priority: cfg.interpretation.model_dir -> newest outputs/gcn/**/final_model -> models/final_model."""
 
     project_root = Path(get_original_cwd())
     interp = cfg.get("interpretation", {}) if hasattr(cfg, "get") else {}
@@ -35,7 +35,7 @@ def _resolve_model_dir(cfg: DictConfig) -> Path:
 
     try:
         candidates = sorted(
-            (p for p in project_root.glob("outputs/train_gcn/**/final_model")),
+            (p for p in project_root.glob("outputs/gcn/**/final_model")),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )

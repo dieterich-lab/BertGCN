@@ -54,7 +54,7 @@ xai:
 # Hydra configuration
 hydra:
   run:
-    dir: outputs/${mode}/hydra/${now:%Y-%m-%d_%H-%M-%S}
+    dir: hydra/${mode}/runs/${now:%Y-%m-%d_%H-%M-%S}
   sweep:
-    dir: outputs/${mode}/multirun/${now:%Y-%m-%d_%H-%M-%S}
+    dir: hydra/${mode}/sweeps/${now:%Y-%m-%d_%H-%M-%S}
     subdir: ${hydra.job.num}

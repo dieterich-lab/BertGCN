@@ -42,8 +42,8 @@ def main():
             remaining_args.extend(["dev=true"])
 
         # Add mode override
-        remaining_args.insert(0, "override mode:train_gcn")
-        train_main(remaining_args if remaining_args else ["override mode:train_gcn"])
+        remaining_args.insert(0, "override mode:gcn")
+        train_main(remaining_args if remaining_args else ["override mode:gcn"])
     elif command == "finetune":
         from .train_bert import main as finetune_main
 
@@ -55,7 +55,7 @@ def main():
     elif command == "interpret":
         from .interpret import main as interpret_main
 
-        interpret_main(["override mode:train_gcn"])
+        interpret_main(["override mode:gcn"])
     else:
         print(f"Unknown command: {command}")
         print("Use 'bertgcn --help' for available commands")

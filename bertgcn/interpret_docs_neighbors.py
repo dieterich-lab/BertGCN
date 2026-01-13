@@ -9,7 +9,7 @@ this score and return top-k influential documents.
 Run:
     poetry run python -m bertgcn.interpret_docs_neighbors
 Output:
-    outputs/train_gcn/interpret/document_influence.csv
+    outputs/gcn/interpret/document_influence.csv
 """
 
 from pathlib import Path
@@ -24,7 +24,7 @@ from bertgcn.train_gcn import BertGCN, load_graph_data_from_disk, load_processed
 
 
 def _resolve_model_dir(cfg: DictConfig) -> Path:
-    """Pick model_dir in priority: cfg.interpretation.model_dir -> newest outputs/train_gcn/**/final_model -> models/final_model."""
+    """Pick model_dir in priority: cfg.interpretation.model_dir -> newest outputs/gcn/**/final_model -> models/final_model."""
 
     project_root = Path(get_original_cwd())
     interp = cfg.get("interpretation", {}) if hasattr(cfg, "get") else {}
@@ -35,7 +35,7 @@ def _resolve_model_dir(cfg: DictConfig) -> Path:
     candidates = []
     try:
         candidates = sorted(
-            (p for p in project_root.glob("outputs/train_gcn/**/final_model")),
+            (p for p in project_root.glob("outputs/gcn/**/final_model")),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
@@ -147,7 +147,7 @@ def run_document_influence(cfg: DictConfig):
     import pandas as pd
 
     project_root = Path(get_original_cwd())
-    out_dir = project_root / "outputs" / "train_gcn" / "interpret"
+    out_dir = project_root / "outputs" / "gcn" / "interpret"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "document_influence.csv"
     pd.DataFrame(rows).to_csv(out_file, index=False)
