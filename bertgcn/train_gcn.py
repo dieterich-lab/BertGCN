@@ -37,7 +37,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-import hydra
 import joblib
 import mlflow
 import numpy as np
@@ -54,6 +53,8 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch_geometric import nn as pyg_nn
 from torch_geometric.utils import dense_to_sparse
 from transformers import AutoModel, AutoTokenizer
+
+import hydra
 
 # Reuse the plain BERT finetuning pipeline when mix_factor=0 for parity.
 from bertgcn import train_bert as tb
@@ -186,8 +187,68 @@ class BertGCN(nn.Module):
         super().__init__()
         self.m = m
         self.nb_class = nb_class
-        self.tokenizer = AutoTokenizer.from_pretrained(pretrained_model)
-        self.bert_model = AutoModel.from_pretrained(pretrained_model)
+        import logging
+
+        import mlflow
+        from transformers import AutoModel, AutoTokenizer
+
+        logger = logging.getLogger("train_gcn")
+
+        # Always fetch the latest fine-tuned BERT from MLflow
+        client = mlflow.tracking.MlflowClient()
+        exp_name = "bertgcn_finetuning"  # Should match your config
+        exp = client.get_experiment_by_name(exp_name)
+        if exp is not None:
+            runs = client.search_runs(
+                exp.experiment_id,
+                "attributes.status = 'FINISHED'",
+                order_by=["attributes.start_time DESC"],
+                max_results=1,
+            )
+            if runs:
+                run = runs[0]
+                artifact_path = "final_model"
+                model_path = mlflow.artifacts.download_artifacts(
+                    run_id=run.info.run_id, artifact_path=artifact_path
+                )
+                # Log run info, date, and BERT hyperparameters
+                run_date = (
+                    run.info.start_time if hasattr(run.info, "start_time") else None
+                )
+                import datetime
+
+                if run_date:
+                    run_date_str = datetime.datetime.fromtimestamp(
+                        run_date / 1000
+                    ).strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    run_date_str = "unknown"
+                bert_params = {}
+                if run.data and run.data.params:
+                    for k, v in run.data.params.items():
+                        if (
+                            "bert" in k
+                            or "learning_rate" in k
+                            or "num_train_epochs" in k
+                            or "batch_size" in k
+                        ):
+                            bert_params[k] = v
+                logger.info(
+                    f"Loaded fine-tuned BERT from MLflow run_id={run.info.run_id}, artifact_path={artifact_path}, local_path={model_path}"
+                )
+                logger.info(f"BERT finetune date: {run_date_str}")
+                if bert_params:
+                    logger.info(f"BERT hyperparameters: {bert_params}")
+            else:
+                raise RuntimeError(
+                    "No fine-tuned BERT model found in MLflow for experiment 'bertgcn_finetuning'. Please run train_bert first."
+                )
+        else:
+            raise RuntimeError(
+                "MLflow experiment 'bertgcn_finetuning' not found. Please run train_bert first."
+            )
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+        self.bert_model = AutoModel.from_pretrained(model_path)
         self.feat_dim = self.bert_model.config.hidden_size
         self.classifier = nn.Linear(self.feat_dim, nb_class)
         self.gcn = SimpleGCN(
@@ -708,6 +769,25 @@ def main(cfg: DictConfig) -> float:
 
     logger.info("🚀 Starting BertGCN Training")
     logger.info(f"📋 Configuration loaded from: {cfg.__class__.__module__}")
+
+    # Log all key hyperparameters at the top
+    hparams_log = [
+        "\n================ HYPERPARAMETERS ================",
+        f"Model:         {getattr(cfg.hparams, 'model_name_or_path', 'N/A')}",
+        f"Mix factor:    {getattr(cfg.gcn, 'mix_factor', 'N/A')}",
+        f"GCN layers:    {getattr(cfg.gcn, 'gcn_layers', 'N/A')}",
+        f"Hidden dim:    {getattr(cfg.model, 'n_hidden', 'N/A')}",
+        f"Dropout:       {getattr(cfg.model, 'dropout', 'N/A')}",
+        f"GCN LR:        {getattr(cfg.training, 'lr', 'N/A')}",
+        f"BERT LR:       {getattr(cfg.training, 'bert_lr', 'N/A')}",
+        f"Weight decay:  {getattr(cfg.training, 'weight_decay', 'N/A')}",
+        f"Epochs:        {getattr(cfg.training, 'epochs', 'N/A')}",
+        f"Batch size:    {getattr(cfg.training, 'batch_size', 'N/A')}",
+        f"Zero word features: {getattr(cfg.training, 'zero_word_features', 'N/A')}",
+        "================================================\n",
+    ]
+    for line in hparams_log:
+        logger.info(line)
 
     # Handle dev mode: limit to 1 epoch for quick testing
     if cfg.get("dev", False):

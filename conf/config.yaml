@@ -26,8 +26,7 @@ dataset:
   val_ratio: 0.1 # The rest (0.2) will be for the test set
 
 # Hyperparameters
-hparams:
-  model_name_or_path: "/prj/doctoral_letters/PETGUI/med_bert_local"
+  # model_name_or_path removed: train_gcn always loads latest fine-tuned BERT from MLflow
   seed: 42
   learning_rate: 2e-5
   weight_decay: 0.01
