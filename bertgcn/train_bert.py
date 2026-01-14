@@ -861,6 +861,7 @@ def main(cfg: DictConfig):
                 tokenizer.save_pretrained(str(final_dir))
                 # Patch config.json to ensure model_type is 'bert' for compatibility
                 import json
+
                 config_path = final_dir / "config.json"
                 if config_path.exists():
                     with open(config_path, "r") as f:

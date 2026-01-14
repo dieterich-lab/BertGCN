@@ -1214,21 +1214,8 @@ def main(cfg: DictConfig) -> float:
             model.tokenizer.save_pretrained(final_model_dir)
 
             # Save model config in transformers format
-            config_dict = {
-                "model_type": "bertgcn",
-                "pretrained_model": cfg.hparams.model_name_or_path,
-                "n_classes": n_classes,
-                "n_features": cfg.model.n_features,
-                "hidden_dim": cfg.model.n_hidden,
-                "mix_factor": cfg.gcn.mix_factor,
-                "gcn_layers": cfg.gcn.gcn_layers,
-                "dropout": cfg.model.dropout,
-                "architectures": ["BertGCN"],
-            }
-            with open(final_model_dir / "config.json", "w") as f:
-                import json
-
-                json.dump(config_dict, f, indent=2)
+            # Do not write a custom config.json with non-HF keys; rely on Hugging Face's own config
+            pass
 
             # Save training args for compatibility
             training_args = {
