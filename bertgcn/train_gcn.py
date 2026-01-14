@@ -199,7 +199,7 @@ class BertGCN(nn.Module):
 
         # Always fetch the latest fine-tuned BERT from MLflow
         client = mlflow.tracking.MlflowClient()
-        exp_name = "bertgcn_finetuning"  # Should match your config
+        exp_name = "train_bert"  # Should match the BERT experiment name
         exp = client.get_experiment_by_name(exp_name)
         if exp is not None:
             runs = client.search_runs(
