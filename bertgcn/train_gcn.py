@@ -819,7 +819,7 @@ def main(cfg: DictConfig) -> float:
     tracking_uri = env_uri or cfg.get("mlflow_tracking_uri") or canonical_uri
     Path(str(tracking_uri).replace("file:", "")).mkdir(parents=True, exist_ok=True)
     mlflow.set_tracking_uri(tracking_uri)
-    mlflow.set_experiment(cfg.mlflow_experiment_name)
+    mlflow.set_experiment("train_gcn")
     if hasattr(mlflow, "log_system_metrics"):
         mlflow.log_system_metrics(True)
 

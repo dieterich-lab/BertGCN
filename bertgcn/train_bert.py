@@ -578,7 +578,7 @@ def main(cfg: DictConfig):
         canonical_dir.mkdir(parents=True, exist_ok=True)
         mlflow.set_tracking_uri(canonical_uri)
         logger.info(f"Using canonical MLflow tracking URI: {canonical_uri}")
-    mlflow.set_experiment(cfg.mlflow_experiment_name)
+    mlflow.set_experiment("train_bert")
     # Enable MLflow autologging for transformers (fallback to pytorch). This
     # helps capture parameters, metrics and artifacts automatically when
     # available.
