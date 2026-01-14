@@ -24,6 +24,9 @@ import sys
 import tempfile
 
 logging.getLogger().setLevel(logging.ERROR)
+logging.getLogger("mlflow").setLevel(logging.ERROR)
+logging.getLogger("mlflow.utils.autologging_utils").setLevel(logging.ERROR)
+logging.getLogger("root").setLevel(logging.ERROR)
 from transformers import logging as hf_logging
 
 hf_logging.set_verbosity_error()
@@ -203,10 +206,16 @@ class BertGCN(nn.Module):
                 exp.experiment_id,
                 "attributes.status = 'FINISHED'",
                 order_by=["attributes.start_time DESC"],
-                max_results=1,
+                max_results=100,
             )
-            if runs:
-                run = runs[0]
+            # Filter runs to only those with the correct experiment_id
+            valid_runs = [
+                r
+                for r in runs
+                if getattr(r.info, "experiment_id", None) == exp.experiment_id
+            ]
+            if valid_runs:
+                run = valid_runs[0]
                 artifact_path = "final_model"
                 model_path = mlflow.artifacts.download_artifacts(
                     run_id=run.info.run_id, artifact_path=artifact_path
@@ -241,7 +250,7 @@ class BertGCN(nn.Module):
                     logger.info(f"BERT hyperparameters: {bert_params}")
             else:
                 raise RuntimeError(
-                    "No fine-tuned BERT model found in MLflow for experiment 'bertgcn_finetuning'. Please run train_bert first."
+                    "No fine-tuned BERT model found in MLflow for experiment 'bertgcn_finetuning' (with correct experiment_id). Please run train_bert first."
                 )
         else:
             raise RuntimeError(
@@ -394,60 +403,6 @@ def _check_graph_alignment(
             raise ValueError(
                 f"{name} split contains unlabeled docs; inspect label encoder or graph build."
             )
-
-    logger.info(
-        "Graph alignment check passed: train=%d val=%d test=%d word=%d (val_offset=%d, test_offset=%d)",
-        train_count,
-        val_count,
-        test_count,
-        word_count,
-        val_offset,
-        test_offset,
-    )
-
-
-def _create_random_graph_data(
-    dataset: Dataset, cfg: DictConfig
-) -> Dict[str, torch.Tensor]:
-    """Create a toy graph dataset used for testing and quick experiments."""
-    n_nodes = len(dataset)
-
-    # Create random adjacency matrix (normalized)
-    adj = torch.randn(n_nodes, n_nodes)
-    adj = (adj + adj.T) / 2  # Make symmetric
-    adj = F.normalize(adj, p=1, dim=1)  # Row-normalize
-
-    # Use random features for now (in practice, you'd use BERT embeddings)
-    features = torch.randn(n_nodes, cfg.model.n_features)
-
-    # Get labels
-    labels = dataset["labels"]
-    if not isinstance(labels, torch.Tensor):
-        labels = torch.tensor(labels, dtype=torch.long)
-    else:
-        labels = labels.clone().detach().long()
-
-    # Create train/val/test splits (simple random split)
-    indices = torch.randperm(n_nodes)
-    n_train = int(cfg.data.train_ratio * n_nodes)
-    n_val = int(cfg.data.val_ratio * n_nodes)
-
-    train_mask = torch.zeros(n_nodes, dtype=torch.bool)
-    val_mask = torch.zeros(n_nodes, dtype=torch.bool)
-    test_mask = torch.zeros(n_nodes, dtype=torch.bool)
-
-    train_mask[indices[:n_train]] = True
-    val_mask[indices[n_train : n_train + n_val]] = True
-    test_mask[indices[n_train + n_val :]] = True
-
-    return {
-        "adj": adj,
-        "features": features,
-        "labels": labels,
-        "train_mask": train_mask,
-        "val_mask": val_mask,
-        "test_mask": test_mask,
-    }
 
 
 def load_graph_data_from_disk(cfg: DictConfig) -> Dict[str, torch.Tensor]:
@@ -773,7 +728,6 @@ def main(cfg: DictConfig) -> float:
     # Log all key hyperparameters at the top
     hparams_log = [
         "\n================ HYPERPARAMETERS ================",
-        f"Model:         {getattr(cfg.hparams, 'model_name_or_path', 'N/A')}",
         f"Mix factor:    {getattr(cfg.gcn, 'mix_factor', 'N/A')}",
         f"GCN layers:    {getattr(cfg.gcn, 'gcn_layers', 'N/A')}",
         f"Hidden dim:    {getattr(cfg.model, 'n_hidden', 'N/A')}",

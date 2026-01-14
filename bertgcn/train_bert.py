@@ -27,7 +27,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Tuple
 
-import hydra
 import joblib
 import mlflow
 import numpy as np
@@ -48,6 +47,8 @@ from transformers import (
 )
 from transformers.data.data_collator import DataCollatorWithPadding
 from transformers.training_args import IntervalStrategy, SaveStrategy
+
+import hydra
 
 OmegaConf.register_new_resolver("basename", lambda p: Path(p).name)
 
@@ -105,7 +106,17 @@ def _get_logger():
 
     # Add console handler with colored formatting
     # Emit logs to stdout so Slurm captures them in *.log files, not *.err.
-    console_handler = logging.StreamHandler(stream=sys.stdout)
+    class FlushingStreamHandler(logging.StreamHandler):
+        def emit(self, record):
+            super().emit(record)
+            try:
+                self.flush()
+                if self.stream and hasattr(self.stream, "flush"):
+                    self.stream.flush()
+            except Exception:
+                pass
+
+    console_handler = FlushingStreamHandler(stream=sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
@@ -389,52 +400,34 @@ def setup_trainer(
         "fp16": cfg.hparams.fp16,
         "disable_tqdm": True,
     }
+
+    # Always enforce EPOCH for both strategies if best model or early stopping is used
+    ta_kwargs["evaluation_strategy"] = IntervalStrategy.EPOCH
+    ta_kwargs["save_strategy"] = SaveStrategy.EPOCH
+
     # Filter to parameters actually accepted by TrainingArguments.__init__
     try:
         sig = inspect.signature(TrainingArguments.__init__)
         accepted = set(sig.parameters.keys()) - {"self"}
         filtered = {k: v for k, v in ta_kwargs.items() if k in accepted}
     except Exception:
-        # If inspection fails for any reason, fall back to passing the full
-        # kwargs (best-effort) — transformers will raise if unsupported.
         filtered = ta_kwargs
 
-    # Compatibility guard BEFORE constructing TrainingArguments: if the user
-    # requested `load_best_model_at_end` but evaluation/save strategies would
-    # not both be passed to TrainingArguments (because they were filtered out
-    # for compatibility with the installed transformers), disable
-    # `load_best_model_at_end` to avoid a hard ValueError in
-    # TrainingArguments.__post_init__.
-    try:
-        if filtered.get("load_best_model_at_end", False):
-            has_eval = "evaluation_strategy" in filtered
-            has_save = "save_strategy" in filtered
-            if not (has_eval and has_save):
-                logger.warning(
-                    "Requested load_best_model_at_end but evaluation/save strategy not both present; disabling load_best_model_at_end for compatibility."
-                )
-                filtered.pop("load_best_model_at_end", None)
-            else:
-                # If both are present but mismatched, align them to EPOCH to
-                # satisfy transformers' validation.
-                try:
-                    eval_val = filtered.get("evaluation_strategy")
-                    save_val = filtered.get("save_strategy")
-                    eval_name = getattr(eval_val, "name", str(eval_val))
-                    save_name = getattr(save_val, "name", str(save_val))
-                    if eval_name != save_name:
-                        logger.info(
-                            "Aligning evaluation_strategy and save_strategy to EPOCH for load_best_model_at_end compatibility."
-                        )
-                        filtered["evaluation_strategy"] = IntervalStrategy.EPOCH
-                        filtered["save_strategy"] = SaveStrategy.EPOCH
-                except Exception:
-                    # If anything goes wrong aligning, remove the flag.
-                    filtered.pop("load_best_model_at_end", None)
-    except Exception:
-        # Non-fatal: if introspection fails, proceed and let TrainingArguments
-        # validate as before.
-        pass
+    # Always ensure both strategies are present before constructing TrainingArguments
+    if "evaluation_strategy" not in filtered:
+        filtered["evaluation_strategy"] = IntervalStrategy.EPOCH
+    if "save_strategy" not in filtered:
+        filtered["save_strategy"] = SaveStrategy.EPOCH
+
+    # Now, align them if needed
+    if filtered.get("load_best_model_at_end", False):
+        eval_val = filtered.get("evaluation_strategy")
+        save_val = filtered.get("save_strategy")
+        eval_name = getattr(eval_val, "name", str(eval_val))
+        save_name = getattr(save_val, "name", str(save_val))
+        if eval_name != save_name:
+            filtered["evaluation_strategy"] = IntervalStrategy.EPOCH
+            filtered["save_strategy"] = SaveStrategy.EPOCH
 
     args = TrainingArguments(**filtered)
 
@@ -884,8 +877,8 @@ def main(cfg: DictConfig):
             except Exception as e:
                 logger.warning(f"⚠️  Could not log final model to MLflow: {e}")
 
-        # Log comprehensive training summary
-        mlruns_path = str(project_root / "outputs" / cfg.mode / "mlruns")
+        # Log comprehensive training summary with the actual MLflow tracking URI
+        mlruns_path = mlflow.get_tracking_uri()
         _log_training_summary(cfg, val_metrics, test_metrics, final_dir, mlruns_path)
 
     return 0
