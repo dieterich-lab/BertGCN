@@ -879,7 +879,7 @@ def main(cfg: DictConfig):
                 logger.warning(f"⚠️  Could not log final model to MLflow: {e}")
 
         # Log comprehensive training summary with the actual MLflow tracking URI
-        mlruns_path = mlflow.get_tracking_uri()
+        mlruns_path = "mlruns"
         _log_training_summary(cfg, val_metrics, test_metrics, final_dir, mlruns_path)
 
     return 0
