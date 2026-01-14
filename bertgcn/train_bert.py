@@ -382,10 +382,11 @@ def setup_trainer(
 ):
     # Build TrainingArguments from a dict and filter to supported params so
     # older/newer transformers versions won't raise on unknown kwargs.
+
     ta_kwargs = {
         "output_dir": out_dir,
-        "evaluation_strategy": IntervalStrategy.EPOCH,
-        "save_strategy": SaveStrategy.EPOCH,
+        "eval_strategy": "epoch",
+        "save_strategy": "epoch",
         "logging_dir": out_dir,  # keep HF logs (trainer_state, events) inside hydra run dir
         "learning_rate": cfg.hparams.learning_rate,
         "per_device_train_batch_size": cfg.hparams.batch_size,
@@ -401,9 +402,9 @@ def setup_trainer(
         "disable_tqdm": True,
     }
 
-    # Always enforce EPOCH for both strategies if best model or early stopping is used
-    ta_kwargs["evaluation_strategy"] = IntervalStrategy.EPOCH
-    ta_kwargs["save_strategy"] = SaveStrategy.EPOCH
+    # Always enforce 'epoch' for both strategies if best model or early stopping is used
+    ta_kwargs["eval_strategy"] = "epoch"
+    ta_kwargs["save_strategy"] = "epoch"
 
     # Filter to parameters actually accepted by TrainingArguments.__init__
     try:
@@ -414,20 +415,18 @@ def setup_trainer(
         filtered = ta_kwargs
 
     # Always ensure both strategies are present before constructing TrainingArguments
-    if "evaluation_strategy" not in filtered:
-        filtered["evaluation_strategy"] = IntervalStrategy.EPOCH
+    if "eval_strategy" not in filtered:
+        filtered["eval_strategy"] = "epoch"
     if "save_strategy" not in filtered:
-        filtered["save_strategy"] = SaveStrategy.EPOCH
+        filtered["save_strategy"] = "epoch"
 
     # Now, align them if needed
     if filtered.get("load_best_model_at_end", False):
-        eval_val = filtered.get("evaluation_strategy")
+        eval_val = filtered.get("eval_strategy")
         save_val = filtered.get("save_strategy")
-        eval_name = getattr(eval_val, "name", str(eval_val))
-        save_name = getattr(save_val, "name", str(save_val))
-        if eval_name != save_name:
-            filtered["evaluation_strategy"] = IntervalStrategy.EPOCH
-            filtered["save_strategy"] = SaveStrategy.EPOCH
+        if str(eval_val) != str(save_val):
+            filtered["eval_strategy"] = "epoch"
+            filtered["save_strategy"] = "epoch"
 
     args = TrainingArguments(**filtered)
 
@@ -440,23 +439,22 @@ def setup_trainer(
     try:
         load_best = getattr(args, "load_best_model_at_end", False)
         if load_best:
-            eval_strat = getattr(args, "evaluation_strategy", None)
+            eval_strat = getattr(args, "eval_strategy", None)
             save_strat = getattr(args, "save_strategy", None)
-            # Normalize to enum names/values where possible
-            eval_name = getattr(eval_strat, "name", str(eval_strat))
-            save_name = getattr(save_strat, "name", str(save_strat))
-            if eval_name in ("NO", "NONE", "None", None) or (eval_name != save_name):
+            if str(eval_strat).lower() in ("no", "none", None) or (
+                str(eval_strat) != str(save_strat)
+            ):
                 logger.info(
-                    "Adjusting TrainingArguments: setting evaluation_strategy and save_strategy to EPOCH for compatibility with load_best_model_at_end=True"
+                    "Adjusting TrainingArguments: setting eval_strategy and save_strategy to 'epoch' for compatibility with load_best_model_at_end=True"
                 )
                 try:
-                    args.evaluation_strategy = IntervalStrategy.EPOCH
+                    args.eval_strategy = "epoch"
                 except Exception:
-                    setattr(args, "evaluation_strategy", IntervalStrategy.EPOCH)
+                    setattr(args, "eval_strategy", "epoch")
                 try:
-                    args.save_strategy = SaveStrategy.EPOCH
+                    args.save_strategy = "epoch"
                 except Exception:
-                    setattr(args, "save_strategy", SaveStrategy.EPOCH)
+                    setattr(args, "save_strategy", "epoch")
     except Exception:
         # Best-effort; don't fail if introspection fails.
         pass
@@ -476,44 +474,37 @@ def setup_trainer(
         trainer_args["class_weights"] = class_weights
 
     # Attach early stopping callback if configured
+
     patience = getattr(cfg.hparams, "early_stopping_patience", None)
     if patience is not None and int(patience) > 0:
         # Ensure TrainingArguments has a valid evaluation strategy; the
         # EarlyStoppingCallback asserts that args.eval_strategy != NO. Some
         # transformers versions may have filtered out the original
-        # `evaluation_strategy` kwarg, so set it explicitly here.
+        # `eval_strategy` kwarg, so set it explicitly here.
         try:
-            current_eval = getattr(args, "evaluation_strategy", None)
-            if (
-                current_eval is None
-                or getattr(current_eval, "name", str(current_eval)) == "NO"
-            ):
+            current_eval = getattr(args, "eval_strategy", None)
+            if current_eval is None or str(current_eval).lower() == "no":
                 logger.info(
-                    "Setting TrainingArguments.evaluation_strategy=EPOCH for EarlyStoppingCallback compatibility"
+                    "Setting TrainingArguments.eval_strategy='epoch' for EarlyStoppingCallback compatibility"
                 )
                 try:
-                    args.evaluation_strategy = IntervalStrategy.EPOCH
+                    args.eval_strategy = "epoch"
                 except Exception:
-                    setattr(args, "evaluation_strategy", IntervalStrategy.EPOCH)
-                # also set alias used by some TF versions
-                try:
-                    args.eval_strategy = IntervalStrategy.EPOCH
-                except Exception:
-                    setattr(args, "eval_strategy", IntervalStrategy.EPOCH)
+                    setattr(args, "eval_strategy", "epoch")
             # Ensure save strategy also aligns when load_best_model_at_end may be used
             try:
                 current_save = getattr(args, "save_strategy", None)
                 if current_save is None:
                     try:
-                        args.save_strategy = SaveStrategy.EPOCH
+                        args.save_strategy = "epoch"
                     except Exception:
-                        setattr(args, "save_strategy", SaveStrategy.EPOCH)
+                        setattr(args, "save_strategy", "epoch")
             except Exception:
                 pass
         except Exception:
             # Don't fail setup if introspection or assignments fail
             logger.warning(
-                "Could not enforce evaluation/save strategy compatibility for EarlyStoppingCallback"
+                "Could not enforce eval/save strategy compatibility for EarlyStoppingCallback"
             )
 
         trainer_args.setdefault("callbacks", [])
@@ -868,6 +859,15 @@ def main(cfg: DictConfig):
             try:
                 trainer.save_model(str(final_dir))
                 tokenizer.save_pretrained(str(final_dir))
+                # Patch config.json to ensure model_type is 'bert' for compatibility
+                import json
+                config_path = final_dir / "config.json"
+                if config_path.exists():
+                    with open(config_path, "r") as f:
+                        config_data = json.load(f)
+                    config_data["model_type"] = "bert"
+                    with open(config_path, "w") as f:
+                        json.dump(config_data, f, indent=2)
                 # Save label encoder
                 le_path = final_dir / "label_encoder.joblib"
                 joblib.dump(le, le_path)
