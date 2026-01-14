@@ -131,7 +131,7 @@ poetry run train-bertgcn gcn.mix_factor=0.7 gcn.zero_word_features=true
 poetry run train-bertgcn training.epochs=50 training.batch_size=32
 ```
 
-**Note:** Hydra run directories are fixed in SLURM scripts for canonical organization (not adjustable in configs).
+
 
 ### Custom Configs
 
@@ -186,19 +186,7 @@ poetry run train-bertgcn --multirun \
 - Results logged to MLflow for comparison
 - Hydra configs saved in `hydra/gcn/sweeps/<timestamp>/`, models in `outputs/gcn/`
 
-### SLURM Integration
 
-For cluster jobs, use the provided scripts in `slurm/` (GPU-supported, with canonical MLflow/Hydra paths):
-
-```bash
-# Submit BERT training
-sbatch slurm/train_bert.sh
-
-# Submit GCN sweep
-sbatch slurm/train_gcn_sweep_phase1.sh
-```
-
-Scripts handle GPU allocation and environment setup.
 
 ---
 
