@@ -92,7 +92,7 @@ BertGCN follows a sequential pipeline:
 ### 4. **Train BertGCN** (`poetry run train-bertgcn`)
    - Trains the full BertGCN ensemble (BERT + GCN)
    - Supports hyperparameter sweeps via Optuna
-   - Saves models to `outputs/gcn/final_model`
+   - Saves models to MLflow artifacts (`final_model`)
    - Logs Hydra configs to `hydra/gcn/runs/<timestamp>/` (single runs) or `hydra/gcn/sweeps/<timestamp>/` (sweeps)
    - Logs experiments to MLflow in the canonical `mlruns` store (experiment: bertgcn_training)
 
@@ -184,7 +184,7 @@ poetry run train-bertgcn --multirun \
 
 - Each combination runs as a separate job
 - Results logged to MLflow for comparison
-- Hydra configs saved in `hydra/gcn/sweeps/<timestamp>/`, models in `outputs/gcn/`
+- Hydra configs saved in `hydra/gcn/sweeps/<timestamp>/`, models in MLflow artifacts
 
 
 
@@ -280,15 +280,15 @@ BertGCN provides three approaches to explain predictions by identifying influent
 
 ### A. Neighbor Scoring (`poetry run interpret-docs-neighbors`)
 - Fast method using edge weights and GCN probabilities
-- Output: `outputs/gcn/interpret/document_influence.csv`
+- Output: `hydra/gcn/interpret/document_influence.csv`
 
 ### B. Integrated Gradients (`poetry run interpret-docs-ig`)
 - Gradient-based attribution over document features
-- Output: `outputs/gcn/interpret/document_influence_ig.csv`
+- Output: `hydra/gcn/interpret/document_influence_ig.csv`
 
 ### C. SHAP-style Perturbation (`poetry run interpret-docs-shap`)
 - Leave-one-out edge removal analysis
-- Output: `outputs/gcn/interpret/document_influence_shap.csv`
+- Output: `hydra/gcn/interpret/document_influence_shap.csv`
 
 Configure via `interpretation.top_k` (default 5) and other settings.
 

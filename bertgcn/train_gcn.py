@@ -180,16 +180,45 @@ class BertGCN(nn.Module):
 
     def __init__(
         self,
-        pretrained_model: str,
-        nb_class: int,
+        pretrained_model: str = None,
+        nb_class: int = None,
         m: float = 0.7,
         gcn_layers: int = 2,
         n_hidden: int = 32,
         dropout: float = 0.5,
+        bert_model=None,
+        tokenizer=None,
+        feat_dim=None,
     ):
         super().__init__()
-        self.m = m
-        self.nb_class = nb_class
+
+        # Support loading from saved state (for MLflow deserialization)
+        if (
+            bert_model is not None
+            and tokenizer is not None
+            and feat_dim is not None
+            and nb_class is not None
+        ):
+            # Loading from saved state - components already provided
+            self.m = m
+            self.nb_class = nb_class
+            self.tokenizer = tokenizer
+            self.bert_model = bert_model
+            self.feat_dim = feat_dim
+            self.classifier = nn.Linear(self.feat_dim, nb_class)
+            self.gcn = SimpleGCN(
+                n_features=self.feat_dim,
+                n_hidden=n_hidden,
+                n_classes=nb_class,
+                dropout=dropout,
+            )
+            return
+
+        # If no arguments provided, this is likely MLflow deserialization - don't initialize
+        if pretrained_model is None and nb_class is None:
+            return
+
+        # Original initialization logic for training
         import logging
 
         import mlflow
@@ -266,6 +295,15 @@ class BertGCN(nn.Module):
             n_classes=nb_class,
             dropout=dropout,
         )
+
+    def __getstate__(self):
+        """Custom serialization for MLflow compatibility."""
+        state = self.__dict__.copy()
+        return state
+
+    def __setstate__(self, state):
+        """Custom deserialization for MLflow compatibility."""
+        self.__dict__.update(state)
 
     def forward(
         self,
@@ -1179,45 +1217,33 @@ def main(cfg: DictConfig) -> float:
         logger.info(f"🎯 Final Test Accuracy: {test_acc:.1%}")
         logger.info("✅ Training completed successfully!")
 
-        # Save final model to temp dir and log to MLflow (MLflow as source of truth)
+        # Save complete BERT+GCN model as clean MLflow artifacts
+        logger.info("Saving complete BERT+GCN model as clean MLflow artifacts...")
+
         with tempfile.TemporaryDirectory() as temp_dir:
-            # Ensure we have a timestamp even if `ts` was not set for some control flows
-            safe_ts = locals().get("ts") or datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            final_model_dir = Path(temp_dir) / f"final_model_{param_str}_{safe_ts}"
-            final_model_dir.mkdir()
+            model_dir = Path(temp_dir) / "final_model"
+            model_dir.mkdir()
 
-            # Save model state dict
-            torch.save(model.state_dict(), final_model_dir / "pytorch_model.bin")
+            # Save BERT model and tokenizer using standard HF format
+            model.bert_model.save_pretrained(model_dir)
+            model.tokenizer.save_pretrained(model_dir)
+            logger.info("✓ BERT model and tokenizer saved")
 
-            # Save tokenizer (same as BERT tokenizer used)
-            model.tokenizer.save_pretrained(final_model_dir)
+            # Save GCN components in a single state dict file
+            torch.save(
+                {
+                    "gcn": model.gcn.state_dict(),
+                    "classifier": model.classifier.state_dict(),
+                    "m": model.m,
+                    "nb_class": model.nb_class,
+                },
+                model_dir / "gcn_components.pt",
+            )
+            logger.info("✓ GCN components saved")
 
-            # Save BERT model config in transformers format
-            model.bert_model.config.save_pretrained(final_model_dir)
-
-            # Save training args for compatibility
-            training_args = {
-                "output_dir": str(final_model_dir),
-                "num_train_epochs": cfg.training.epochs,
-                "per_device_train_batch_size": 64,  # From dataloader
-                "per_device_eval_batch_size": 64,
-                "learning_rate": cfg.training.lr,
-                "weight_decay": 0.01,
-                "adam_beta1": 0.9,
-                "adam_beta2": 0.999,
-                "adam_epsilon": 1e-8,
-                "max_grad_norm": 1.0,
-            }
-            with open(final_model_dir / "training_args.bin", "wb") as f:
-                import pickle
-
-                pickle.dump(training_args, f)
-
-            # Log to MLflow (source of truth)
-            try:
-                mlflow.log_artifacts(str(final_model_dir), artifact_path="final_model")
-            except Exception as e:
-                logger.warning(f"Failed to log model to MLflow: {e}")
+            # Log the complete model artifacts to MLflow
+            mlflow.log_artifacts(str(model_dir), artifact_path="final_model")
+            logger.info("💾 Complete BertGCN model logged to MLflow as clean artifacts")
 
         logger.info(f"💾 Final BertGCN model logged to MLflow (artifact: final_model)")
 

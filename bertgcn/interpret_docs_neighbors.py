@@ -8,7 +8,7 @@ aggregated path scores and return top-k influential documents.
 Run:
     poetry run python -m bertgcn.interpret_docs_neighbors
 Output:
-    outputs/gcn/interpret/document_influence_2hop.csv
+    hydra/gcn/interpret/document_influence_2hop.csv
 """
 
 from pathlib import Path
@@ -31,7 +31,7 @@ logger = get_logger(__name__)
 
 
 def _resolve_model_dir(cfg: DictConfig) -> Path:
-    """Pick model_dir in priority: cfg.interpretation.model_dir -> MLflow artifacts -> outputs/gcn/**/final_model -> models/final_model."""
+    """Pick model_dir in priority: cfg.interpretation.model_dir -> MLflow artifacts -> hydra/gcn/**/final_model -> models/final_model."""
 
     try:
         project_root = Path(get_original_cwd())
@@ -68,17 +68,19 @@ def _resolve_model_dir(cfg: DictConfig) -> Path:
                     run_id=run.info.run_id, artifact_path=artifact_path
                 )
                 if Path(model_dir).is_dir():
-                    logger.info(f"Found GCN model in MLflow run {run.info.run_id[:8]}...")
+                    logger.info(
+                        f"Found GCN model in MLflow run {run.info.run_id[:8]}..."
+                    )
                     return Path(model_dir)
     except Exception as e:
         logger.warning(f"Failed to load from MLflow: {e}")
 
-    # Fallback: look for models in outputs/gcn/**/final_model
+    # Fallback: look for models in hydra/gcn/**/final_model
     logger.info("Checking local model directories...")
     candidates = []
     try:
         candidates = sorted(
-            (p for p in project_root.glob("outputs/gcn/**/final_model")),
+            (p for p in project_root.glob("hydra/gcn/**/final_model")),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
@@ -95,133 +97,53 @@ def _resolve_model_dir(cfg: DictConfig) -> Path:
 
 
 def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
-    # Get model directory from MLflow GCN artifacts
+    # Load complete BERT+GCN model from clean MLflow artifact structure
+    logger.info("Loading complete BERT+GCN model from MLflow artifacts...")
     model_dir = _resolve_model_dir(cfg)
 
-    # Try to load complete BERT+GCN model from artifacts
-    logger.info("Loading BERT+GCN model...")
     try:
         from transformers import AutoModel, AutoTokenizer
 
+        # Load BERT model and tokenizer using standard HF loading
         tokenizer = AutoTokenizer.from_pretrained(model_dir)
         bert_model = AutoModel.from_pretrained(model_dir)
         feat_dim = bert_model.config.hidden_size
-        load_from_artifacts = True
-        logger.info("✓ Loaded BERT model and tokenizer from artifacts")
-    except (ValueError, OSError):
-        logger.info("✗ BERT not in artifacts, using legacy loading (BERT from separate MLflow run)")
-        load_from_artifacts = False
-        # Get GCN config from MLflow run parameters
-        model_config = None
-        try:
-            import ast
-            import mlflow
 
-            client = mlflow.tracking.MlflowClient()
-            exp_name = "train_gcn"
-            exp = client.get_experiment_by_name(exp_name)
-            if exp is not None:
-                runs = client.search_runs(
-                    exp.experiment_id,
-                    "attributes.status = 'FINISHED'",
-                    order_by=["attributes.start_time DESC"],
-                    max_results=1,
-                )
-                if runs:
-                    run = runs[0]
-                    gcn_params_str = run.data.params.get("gcn")
-                    if gcn_params_str:
-                        model_config = ast.literal_eval(gcn_params_str)
-        except Exception:
-            pass
+        # Load GCN components from the single state dict file
+        gcn_checkpoint = torch.load(model_dir / "gcn_components.pt", map_location="cpu")
+        m = gcn_checkpoint["m"]
+        nb_class = gcn_checkpoint["nb_class"]
 
-        # Use MLflow config if available, otherwise fall back to cfg
-        if model_config:
-            gcn_config = model_config
-        else:
-            gcn_config = cfg.gcn
-
-        # Create model using legacy method
-        model = BertGCN(
-            pretrained_model=cfg.hparams.model_name_or_path,
-            nb_class=n_classes,
-            m=gcn_config.get("mix_factor", cfg.gcn.mix_factor),
-            gcn_layers=gcn_config.get("gcn_layers", cfg.gcn.gcn_layers),
-            n_hidden=gcn_config.get("n_hidden", cfg.gcn.n_hidden),
-            dropout=gcn_config.get("dropout", cfg.gcn.dropout),
+        # Create BertGCN model manually
+        model = BertGCN.__new__(BertGCN)  # Create instance without calling __init__
+        model.m = m
+        model.nb_class = nb_class
+        model.tokenizer = tokenizer
+        model.bert_model = bert_model
+        model.feat_dim = feat_dim
+        model.classifier = nn.Linear(feat_dim, nb_class)
+        model.gcn = SimpleGCN(
+            n_features=feat_dim,
+            n_hidden=cfg.gcn.n_hidden,
+            n_classes=nb_class,
+            dropout=cfg.gcn.dropout,
         )
 
-        # Load the saved state dict
-        ckpt_path = model_dir / "pytorch_model.bin"
-        if ckpt_path.exists():
-            state = torch.load(ckpt_path, map_location="cpu")
-            model.load_state_dict(state, strict=False)
-            logger.info("✓ Loaded GCN weights from checkpoint")
-        else:
-            raise FileNotFoundError(f"Model checkpoint not found at {ckpt_path}")
+        # Load the saved weights
+        model.classifier.load_state_dict(gcn_checkpoint["classifier"])
+        model.gcn.load_state_dict(gcn_checkpoint["gcn"])
+
+        logger.info("✓ Loaded complete BERT+GCN model from clean MLflow artifacts")
         model.eval()
-        logger.info("✓ Model loaded (legacy mode)")
         return model
 
-    # If we get here, load_from_artifacts is True
-    # Get GCN config from MLflow run parameters
-    model_config = None
-    try:
-        import ast
-        import mlflow
-
-        client = mlflow.tracking.MlflowClient()
-        exp_name = "train_gcn"
-        exp = client.get_experiment_by_name(exp_name)
-        if exp is not None:
-            runs = client.search_runs(
-                exp.experiment_id,
-                "attributes.status = 'FINISHED'",
-                order_by=["attributes.start_time DESC"],
-                max_results=1,
-            )
-            if runs:
-                run = runs[0]
-                gcn_params_str = run.data.params.get("gcn")
-                if gcn_params_str:
-                    model_config = ast.literal_eval(gcn_params_str)
-    except Exception:
-        pass
-
-    # Use MLflow config if available, otherwise fall back to cfg
-    if model_config:
-        gcn_config = model_config
-    else:
-        gcn_config = cfg.gcn
-
-    # Create BertGCN model manually (loading BERT from artifacts)
-    import torch.nn as nn
-
-    model = BertGCN.__new__(BertGCN)  # Create instance without calling __init__
-    model.m = gcn_config.get("mix_factor", cfg.gcn.mix_factor)
-    model.nb_class = n_classes
-    model.tokenizer = tokenizer
-    model.bert_model = bert_model
-    model.feat_dim = feat_dim
-    model.classifier = nn.Linear(feat_dim, n_classes)
-    model.gcn = SimpleGCN(
-        n_features=feat_dim,
-        n_hidden=gcn_config.get("n_hidden", cfg.gcn.n_hidden),
-        n_classes=n_classes,
-        dropout=gcn_config.get("dropout", cfg.gcn.dropout),
-    )
-
-    # Load the saved state dict
-    ckpt_path = model_dir / "pytorch_model.bin"
-    if ckpt_path.exists():
-        state = torch.load(ckpt_path, map_location="cpu")
-        model.load_state_dict(state, strict=False)
-        logger.info("✓ Loaded GCN weights from checkpoint")
-    else:
-        raise FileNotFoundError(f"Model checkpoint not found at {ckpt_path}")
-    model.eval()
-    logger.info("✓ Model loaded (artifacts mode)")
-    return model
+    except Exception as e:
+        logger.error(f"✗ Failed to load complete BERT+GCN model from artifacts: {e}")
+        logger.error("This likely means the model was saved with an old format")
+        logger.error("Please retrain the GCN model to save complete artifacts")
+        raise RuntimeError(
+            "Model artifacts are incomplete or corrupted. Please retrain with the updated saving code."
+        ) from e
 
 
 def _compute_neighbor_scores(
@@ -479,7 +401,7 @@ def run_document_influence(cfg: DictConfig):
     except ValueError:
         project_root = Path.cwd()
 
-    out_dir = project_root / "outputs" / "gcn" / "interpret"
+    out_dir = project_root / "hydra" / "gcn" / "interpret"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "document_influence_2hop.csv"
     pd.DataFrame(rows).to_csv(out_file, index=False)

@@ -56,7 +56,12 @@ inference:
   output_file: "outputs/predictions.csv"
   debug: false
 
+# Interpretation configuration
+interpretation:
+  top_k: 5
+  model_dir: null  # Will auto-resolve from MLflow if not set
+
 # Hydra configuration - paths controlled by scripts, not config
 hydra:
   run:
-    dir: ${mode}/${now:%Y-%m-%d_%H-%M-%S}
+    dir: hydra/${mode}/${now:%Y-%m-%d_%H-%M-%S}

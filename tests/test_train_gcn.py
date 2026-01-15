@@ -14,15 +14,10 @@ import torch
 from datasets import Dataset
 from omegaconf import DictConfig, OmegaConf
 from sklearn.preprocessing import LabelEncoder
+from torch_geometric import nn as pyg_nn
 
 sys.path.insert(0, "/home/pwiesenbach/BertGCN/src")
-from bertgcn.train_gcn import (
-    GraphConv,
-    SimpleGCN,
-    evaluate,
-    load_processed_dataset,
-    train_epoch,
-)
+from bertgcn.train_gcn import SimpleGCN, evaluate, load_processed_dataset, train_epoch
 
 
 @pytest.fixture
@@ -70,23 +65,6 @@ def mock_label_encoder():
     return le
 
 
-class TestGraphConv:
-    """Test the GraphConv layer."""
-
-    def test_forward_pass(self):
-        """Test forward pass of GraphConv."""
-        in_features, out_features = 16, 32
-        n_nodes = 10
-
-        layer = GraphConv(in_features, out_features)
-        x = torch.randn(n_nodes, in_features)
-        adj = torch.randn(n_nodes, n_nodes)
-
-        output = layer(x, adj)
-
-        assert output.shape == (n_nodes, out_features)
-
-
 class TestSimpleGCN:
     """Test the SimpleGCN model."""
 
@@ -97,9 +75,10 @@ class TestSimpleGCN:
 
         model = SimpleGCN(n_features, n_hidden, n_classes)
         x = torch.randn(n_nodes, n_features)
-        adj = torch.randn(n_nodes, n_nodes)
+        # Create a simple edge_index (COO format)
+        edge_index = torch.tensor([[0, 1, 2, 3], [1, 2, 3, 0]], dtype=torch.long)
 
-        output = model(x, adj)
+        output = model(x, edge_index)
 
         assert output.shape == (n_nodes, n_classes)
         # Check that output is log probabilities (negative values)

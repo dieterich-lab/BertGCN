@@ -8,7 +8,7 @@ ranking.
 Usage:
     poetry run python -m bertgcn.interpret_docs_ig
 Output:
-    outputs/gcn/interpret/document_influence_ig.csv
+    hydra/gcn/interpret/document_influence_ig.csv
 Config:
     interpretation.top_k (default 5), interpretation.max_docs (optional)
 """
@@ -16,16 +16,16 @@ Config:
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-import hydra
 import torch
 from hydra.utils import get_original_cwd
 from omegaconf import DictConfig, OmegaConf
 
+import hydra
 from bertgcn.train_gcn import BertGCN, load_graph_data_from_disk, load_processed_dataset
 
 
 def _resolve_model_dir(cfg: DictConfig) -> Path:
-    """Pick model_dir in priority: cfg.interpretation.model_dir -> newest outputs/gcn/**/final_model -> models/final_model."""
+    """Pick model_dir in priority: cfg.interpretation.model_dir -> newest hydra/gcn/**/final_model -> models/final_model."""
 
     project_root = Path(get_original_cwd())
     interp = cfg.get("interpretation", {}) if hasattr(cfg, "get") else {}
@@ -35,7 +35,7 @@ def _resolve_model_dir(cfg: DictConfig) -> Path:
 
     try:
         candidates = sorted(
-            (p for p in project_root.glob("outputs/gcn/**/final_model")),
+            (p for p in project_root.glob("hydra/gcn/**/final_model")),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
@@ -152,7 +152,7 @@ def run_document_ig(cfg: DictConfig):
     import pandas as pd
 
     project_root = Path(get_original_cwd())
-    out_dir = project_root / "outputs" / "gcn" / "interpret"
+    out_dir = project_root / "hydra" / "gcn" / "interpret"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "document_influence_ig.csv"
     pd.DataFrame(rows).to_csv(out_file, index=False)
