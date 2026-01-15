@@ -59,4 +59,4 @@ inference:
 # Hydra configuration - paths controlled by scripts, not config
 hydra:
   run:
-    dir: hydra/inference/${now:%Y-%m-%d_%H-%M-%S}
+    dir: ${mode}/${now:%Y-%m-%d_%H-%M-%S}
