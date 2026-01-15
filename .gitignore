@@ -1,6 +1,7 @@
 notebooks/
 models/
 hydra/
+multirun/
 mlruns/
 outputs/
 run.sh
