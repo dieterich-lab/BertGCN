@@ -46,13 +46,13 @@ def _resolve_model_dir(cfg: DictConfig) -> Path:
         logger.info(f"Using explicitly configured model directory: {model_dir}")
         return model_dir
 
-    # First, try to find latest model from MLflow artifacts
-    logger.info("Searching for latest model in MLflow artifacts...")
+    # Try to find latest model from MLflow artifacts
+    logger.info("Looking for latest GCN model in MLflow...")
     try:
         import mlflow
 
         client = mlflow.tracking.MlflowClient()
-        exp_name = "train_gcn"  # Should match the GCN experiment name
+        exp_name = "train_gcn"
         exp = client.get_experiment_by_name(exp_name)
         if exp is not None:
             runs = client.search_runs(
@@ -63,19 +63,18 @@ def _resolve_model_dir(cfg: DictConfig) -> Path:
             )
             if runs:
                 run = runs[0]
-                logger.info(f"Found latest MLflow run: {run.info.run_id}")
                 artifact_path = "final_model"
                 model_dir = mlflow.artifacts.download_artifacts(
                     run_id=run.info.run_id, artifact_path=artifact_path
                 )
                 if Path(model_dir).is_dir():
-                    logger.info(f"Using model from MLflow artifacts: {model_dir}")
+                    logger.info(f"Found GCN model in MLflow run {run.info.run_id[:8]}...")
                     return Path(model_dir)
     except Exception as e:
-        logger.warning(f"Failed to load model from MLflow artifacts: {e}")
+        logger.warning(f"Failed to load from MLflow: {e}")
 
     # Fallback: look for models in outputs/gcn/**/final_model
-    logger.info("Falling back to searching outputs/gcn/**/final_model directories...")
+    logger.info("Checking local model directories...")
     candidates = []
     try:
         candidates = sorted(
@@ -89,20 +88,18 @@ def _resolve_model_dir(cfg: DictConfig) -> Path:
     fallback = project_root / "models" / "final_model"
     for cand in candidates + [fallback]:
         if cand.is_dir():
-            logger.info(f"Using model directory: {cand}")
+            logger.info(f"Using local model directory: {cand}")
             return cand
-    logger.info(f"Using fallback model directory: {fallback}")
+    logger.warning(f"No model directory found, using fallback: {fallback}")
     return fallback
 
 
 def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
-    logger.info("Resolving model directory...")
     # Get model directory from MLflow GCN artifacts
     model_dir = _resolve_model_dir(cfg)
-    logger.info(f"Using model directory: {model_dir}")
 
-    # Try to load BERT model and tokenizer from GCN artifacts
-    logger.info("Attempting to load BERT model and tokenizer from artifacts...")
+    # Try to load complete BERT+GCN model from artifacts
+    logger.info("Loading BERT+GCN model...")
     try:
         from transformers import AutoModel, AutoTokenizer
 
@@ -110,16 +107,14 @@ def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
         bert_model = AutoModel.from_pretrained(model_dir)
         feat_dim = bert_model.config.hidden_size
         load_from_artifacts = True
-        logger.info("Successfully loaded BERT model and tokenizer from artifacts")
+        logger.info("✓ Loaded BERT model and tokenizer from artifacts")
     except (ValueError, OSError):
-        # Fall back to old method if BERT config not saved in artifacts
-        logger.info("BERT artifacts not found, falling back to legacy loading method")
+        logger.info("✗ BERT not in artifacts, using legacy loading (BERT from separate MLflow run)")
         load_from_artifacts = False
         # Get GCN config from MLflow run parameters
         model_config = None
         try:
             import ast
-
             import mlflow
 
             client = mlflow.tracking.MlflowClient()
@@ -143,13 +138,10 @@ def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
         # Use MLflow config if available, otherwise fall back to cfg
         if model_config:
             gcn_config = model_config
-            logger.info("Using GCN config from MLflow run parameters")
         else:
             gcn_config = cfg.gcn
-            logger.info("Using GCN config from current configuration")
 
-        # Create model using old method
-        logger.info("Creating BertGCN model with legacy method...")
+        # Create model using legacy method
         model = BertGCN(
             pretrained_model=cfg.hparams.model_name_or_path,
             nb_class=n_classes,
@@ -162,23 +154,20 @@ def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
         # Load the saved state dict
         ckpt_path = model_dir / "pytorch_model.bin"
         if ckpt_path.exists():
-            logger.info(f"Loading model checkpoint from {ckpt_path}")
             state = torch.load(ckpt_path, map_location="cpu")
             model.load_state_dict(state, strict=False)
-            logger.info("Model checkpoint loaded successfully")
+            logger.info("✓ Loaded GCN weights from checkpoint")
         else:
             raise FileNotFoundError(f"Model checkpoint not found at {ckpt_path}")
         model.eval()
-        logger.info("Model loaded and set to evaluation mode")
+        logger.info("✓ Model loaded (legacy mode)")
         return model
 
     # If we get here, load_from_artifacts is True
-    logger.info("Loading GCN configuration from MLflow...")
     # Get GCN config from MLflow run parameters
     model_config = None
     try:
         import ast
-
         import mlflow
 
         client = mlflow.tracking.MlflowClient()
@@ -202,13 +191,10 @@ def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
     # Use MLflow config if available, otherwise fall back to cfg
     if model_config:
         gcn_config = model_config
-        logger.info("Using GCN config from MLflow run parameters")
     else:
         gcn_config = cfg.gcn
-        logger.info("Using GCN config from current configuration")
 
     # Create BertGCN model manually (loading BERT from artifacts)
-    logger.info("Creating BertGCN model with BERT loaded from artifacts...")
     import torch.nn as nn
 
     model = BertGCN.__new__(BertGCN)  # Create instance without calling __init__
@@ -228,14 +214,13 @@ def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
     # Load the saved state dict
     ckpt_path = model_dir / "pytorch_model.bin"
     if ckpt_path.exists():
-        logger.info(f"Loading model checkpoint from {ckpt_path}")
         state = torch.load(ckpt_path, map_location="cpu")
         model.load_state_dict(state, strict=False)
-        logger.info("Model checkpoint loaded successfully")
+        logger.info("✓ Loaded GCN weights from checkpoint")
     else:
         raise FileNotFoundError(f"Model checkpoint not found at {ckpt_path}")
     model.eval()
-    logger.info("Model loaded and set to evaluation mode")
+    logger.info("✓ Model loaded (artifacts mode)")
     return model
 
 
@@ -368,7 +353,9 @@ def _compute_2hop_neighbor_scores(
 
         # Log progress every 100 nodes
         if (idx + 1) % 100 == 0:
-            logger.info(f"Processed {idx + 1}/{len(node_indices)} nodes for 2-hop scoring")
+            logger.info(
+                f"Processed {idx + 1}/{len(node_indices)} nodes for 2-hop scoring"
+            )
 
     logger.info(f"Completed 2-hop scoring for {len(results)} nodes")
     return results
@@ -384,11 +371,15 @@ def run_document_influence(cfg: DictConfig):
     logger.info("Loading processed dataset...")
     dataset, label_encoder = load_processed_dataset(cfg)
     n_classes = len(label_encoder.classes_)
-    logger.info(f"Loaded dataset with {len(dataset)} samples, {n_classes} classes: {list(label_encoder.classes_)}")
+    logger.info(
+        f"Loaded dataset with {len(dataset)} samples, {n_classes} classes: {list(label_encoder.classes_)}"
+    )
 
     logger.info("Loading graph data from disk...")
     data = load_graph_data_from_disk(cfg)
-    logger.info(f"Loaded graph with {data['features'].shape[0]} nodes, {data['edge_index'].shape[1]} edges")
+    logger.info(
+        f"Loaded graph with {data['features'].shape[0]} nodes, {data['edge_index'].shape[1]} edges"
+    )
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
@@ -406,7 +397,9 @@ def run_document_influence(cfg: DictConfig):
     # Only analyze document nodes (exclude word nodes)
     doc_mask = data["train_mask"] | data["val_mask"] | data["test_mask"]
     doc_indices = torch.where(doc_mask.cpu())[0]
-    logger.info(f"Analyzing {len(doc_indices)} document nodes out of {doc_mask.shape[0]} total nodes")
+    logger.info(
+        f"Analyzing {len(doc_indices)} document nodes out of {doc_mask.shape[0]} total nodes"
+    )
 
     # Get GCN probabilities for the full graph (needed for neighbor scoring)
     logger.info("Computing GCN probabilities for full graph...")
@@ -441,7 +434,9 @@ def run_document_influence(cfg: DictConfig):
             all_hybrid_probs.append(probs)
 
             if (i // batch_size + 1) % 10 == 0 or i + batch_size >= len(doc_indices):
-                logger.info(f"Processed {min(i + batch_size, len(doc_indices))}/{len(doc_indices)} documents")
+                logger.info(
+                    f"Processed {min(i + batch_size, len(doc_indices))}/{len(doc_indices)} documents"
+                )
 
     # Concatenate all batch predictions
     hybrid_probs = torch.cat(all_hybrid_probs, dim=0)
