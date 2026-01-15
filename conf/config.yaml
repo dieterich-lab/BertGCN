@@ -54,6 +54,7 @@ xai:
 # Inference configuration
 inference:
   output_file: "outputs/predictions.csv"
+  debug: false
 
 # Hydra configuration - paths controlled by scripts, not config
 hydra:

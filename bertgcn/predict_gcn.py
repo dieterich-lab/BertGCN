@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import torch
 from omegaconf import DictConfig, OmegaConf
+from sklearn.metrics import accuracy_score, f1_score
 from sklearn.preprocessing import LabelEncoder
 
 from bertgcn.train_gcn import BertGCN, load_graph_data_from_disk, load_processed_dataset
@@ -113,7 +114,7 @@ def predict_gcn(cfg: DictConfig):
     test_indices = torch.where(test_mask)[0]
     print(f"Test indices: {len(test_indices)}", flush=True)
     # Run prediction in batches
-    batch_size = 16
+    batch_size = 64
     preds = []
     probs = []
     print("Starting prediction loop", flush=True)
@@ -136,6 +137,16 @@ def predict_gcn(cfg: DictConfig):
             preds.extend(pred)
             probs.extend(prob)
     print("Prediction loop done", flush=True)
+
+    # Calculate metrics if debug mode is enabled
+    if getattr(cfg.inference, "debug", False):
+        true_labels = [int(data["labels"][idx]) for idx in test_indices]
+        accuracy = accuracy_score(true_labels, preds)
+        f1 = f1_score(true_labels, preds, average="weighted")
+        print("\n📊 DEBUG MODE - Test Set Metrics:")
+        print(f"   • Accuracy: {accuracy:.1%}")
+        print(f"   • F1 Score (weighted): {f1:.3f}")
+        print(f"   • Training reference: 95.0% accuracy")
     # Prepare output
     output_data = []
     for i, (pred, prob, idx) in enumerate(zip(preds, probs, test_indices)):
