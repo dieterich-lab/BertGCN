@@ -40,6 +40,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
+import hydra
 import joblib
 import mlflow
 import numpy as np
@@ -56,8 +57,6 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch_geometric import nn as pyg_nn
 from torch_geometric.utils import dense_to_sparse
 from transformers import AutoModel, AutoTokenizer
-
-import hydra
 
 # Reuse the plain BERT finetuning pipeline when mix_factor=0 for parity.
 from bertgcn import train_bert as tb
@@ -777,30 +776,12 @@ def main(cfg: DictConfig) -> float:
         )
         return tb.main.__wrapped__(cfg)
 
-    # Resolve a deterministic Hydra run dir; fall back to outputs/<mode>/<timestamp>
-    # Ensure a timestamp is always available for naming final artifacts.
+    # Resolve run directory - hardcoded path, not controlled by Hydra config
+    # Use multirun structure for consistency but control it from script
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    try:
-        hydra_cfg = HydraConfig.get()
-        hydra_run_dir = Path(hydra_cfg.runtime.output_dir)
-    except Exception:
-        hydra_run_dir = None
-
-    if not hydra_run_dir or "None" in str(hydra_run_dir):
-        job = getattr(cfg, "mode", None)
-        job = job if job and job != "None" else "gcn"
-        hydra_run_dir = project_root / "outputs" / job / ts
-    else:
-        # If Hydra provided an output dir, attempt to extract a sensible timestamp
-        # segment for artifact naming; fall back to the generated `ts` above.
-        try:
-            extracted = Path(hydra_run_dir).name
-            if extracted:
-                ts = extracted
-        except Exception:
-            pass
-
-    run_dir = hydra_run_dir
+    job = getattr(cfg, "mode", None)
+    job = job if job and job != "None" else "gcn"
+    run_dir = project_root / "multirun" / f"{job}_{ts}"
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # Save resolved config for reproducibility
@@ -837,7 +818,7 @@ def main(cfg: DictConfig) -> float:
 
     with mlflow.start_run(run_name=run_dir.name):
         # Log parameters
-        mlflow.set_tag("hydra_run_dir", str(run_dir))
+        mlflow.set_tag("run_dir", str(run_dir))
         mlflow.set_tag("git_sha", git_sha)
         mlflow.set_tag("mode", str(getattr(cfg, "mode", "gcn")))
         mlflow.log_params(OmegaConf.to_container(cfg, resolve=True))
@@ -1244,7 +1225,7 @@ def main(cfg: DictConfig) -> float:
         logger.info(f"💾 Final BertGCN model logged to MLflow (artifact: final_model)")
 
         # Log comprehensive training summary
-        mlruns_path = str(project_root / "outputs" / "gcn" / "mlruns")
+        mlruns_path = str(project_root / "mlruns")
         _log_gcn_training_summary(test_acc, mlruns_path, logger)
 
         return test_acc

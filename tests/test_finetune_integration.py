@@ -124,6 +124,7 @@ def test_finetune_dryrun_monkeypatched(tmp_path, monkeypatch):
     mlflow.set_tracking_uri(str(tmp_mlruns))
 
     # Build a minimal cfg matching what main expects
+    # Note: hydra run dir config is now ignored by script
     cfg = {
         "hparams": {
             "seed": 42,
@@ -137,7 +138,7 @@ def test_finetune_dryrun_monkeypatched(tmp_path, monkeypatch):
             "use_stratified_split": False,
             "use_class_weights": False,
         },
-        "hydra": {"run": {"dir": "outputs/tmp_run"}},
+        "hydra": {"run": {"dir": "ignored/hydra/path"}},  # Ignored by script
         "mlflow_experiment_name": "test_integration",
     }
 

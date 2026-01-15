@@ -130,8 +130,10 @@ def monkeypatch_hf(monkeypatch, tiny_dataset):
 
 
 @pytest.mark.parametrize("override_dir", [None, "custom/run_dir/test_case"])
-def test_hydra_run_dir_and_no_local_dup(monkeypatch_hf, tmp_path, override_dir):
-    # Build minimal cfg
+def test_script_controlled_run_dir_and_no_local_dup(
+    monkeypatch_hf, tmp_path, override_dir
+):
+    # Build minimal cfg - note: hydra dir config is now ignored by script
     base_cfg = {
         "hparams": {
             "seed": 1,
@@ -146,22 +148,26 @@ def test_hydra_run_dir_and_no_local_dup(monkeypatch_hf, tmp_path, override_dir):
             "use_class_weights": False,
             "keep_local_copy": False,
         },
-        "mlflow_experiment_name": "test_hydra_behavior",
-        "hydra": {"run": {"dir": "hydra/finetune/test_run"}},
+        "mlflow_experiment_name": "test_script_controlled_behavior",
+        # Hydra config is present but ignored by script
+        "hydra": {"run": {"dir": "ignored/hydra/path"}},
     }
-    if override_dir:
-        # Simulate command-line override by putting alternative path only
-        base_cfg["hydra"]["run"]["dir"] = override_dir
     cfg = OmegaConf.create(base_cfg)
 
     # Execute main (bypassing hydra decorator)
     fb.main.__wrapped__(cfg)
 
-    run_dir = Path(base_cfg["hydra"]["run"]["dir"])
-    assert run_dir.exists(), f"Expected hydra run dir {run_dir} to exist"
+    # Script should create multirun/bert_* directory regardless of hydra config
+    multirun_dir = Path("multirun")
+    assert multirun_dir.exists(), "Expected multirun directory to be created by script"
+
+    bert_dirs = list(multirun_dir.glob("bert_*"))
+    assert bert_dirs, "Expected at least one bert_* directory in multirun"
+    run_dir = bert_dirs[0]  # Use the first one found
+
     # Check checkpoint presence
     ckpts = list(run_dir.glob("checkpoint-*/pytorch_model.bin"))
-    assert ckpts, "Expected at least one checkpoint file in hydra run dir"
+    assert ckpts, "Expected at least one checkpoint file in run dir"
 
     # Evaluation subfolder should exist; confusion_matrix.json should NOT be local
     eval_dir = run_dir / "evaluation"

@@ -27,6 +27,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Tuple
 
+import hydra
 import joblib
 import mlflow
 import numpy as np
@@ -47,8 +48,6 @@ from transformers import (
 )
 from transformers.data.data_collator import DataCollatorWithPadding
 from transformers.training_args import IntervalStrategy, SaveStrategy
-
-import hydra
 
 OmegaConf.register_new_resolver("basename", lambda p: Path(p).name)
 
@@ -167,25 +166,55 @@ def _log_training_summary(cfg, val_metrics, test_metrics, final_dir, mlruns_path
     summary_lines.append("🎯 TRAINING COMPLETED SUCCESSFULLY")
     summary_lines.append("")
     summary_lines.append("📊 BEST VALIDATION METRICS:")
+    acc = val_metrics.get("eval_accuracy", "N/A")
     summary_lines.append(
-        f"   • Accuracy:  {val_metrics.get('eval_accuracy', 'N/A'):.1%}"
+        f"   • Accuracy:  {acc:.1%}"
+        if isinstance(acc, (int, float))
+        else f"   • Accuracy:  {acc}"
     )
-    summary_lines.append(f"   • F1 Score:  {val_metrics.get('eval_f1', 'N/A'):.3f}")
+    f1 = val_metrics.get("eval_f1", "N/A")
     summary_lines.append(
-        f"   • Precision: {val_metrics.get('eval_precision', 'N/A'):.3f}"
+        f"   • F1 Score:  {f1:.3f}"
+        if isinstance(f1, (int, float))
+        else f"   • F1 Score:  {f1}"
     )
-    summary_lines.append(f"   • Recall:    {val_metrics.get('eval_recall', 'N/A'):.3f}")
+    prec = val_metrics.get("eval_precision", "N/A")
+    summary_lines.append(
+        f"   • Precision: {prec:.3f}"
+        if isinstance(prec, (int, float))
+        else f"   • Precision: {prec}"
+    )
+    recall = val_metrics.get("eval_recall", "N/A")
+    summary_lines.append(
+        f"   • Recall:    {recall:.3f}"
+        if isinstance(recall, (int, float))
+        else f"   • Recall:    {recall}"
+    )
     summary_lines.append("")
     summary_lines.append("🧪 TEST SET PERFORMANCE:")
+    test_acc = test_metrics.get("eval_accuracy", "N/A")
     summary_lines.append(
-        f"   • Accuracy:  {test_metrics.get('eval_accuracy', 'N/A'):.1%}"
+        f"   • Accuracy:  {test_acc:.1%}"
+        if isinstance(test_acc, (int, float))
+        else f"   • Accuracy:  {test_acc}"
     )
-    summary_lines.append(f"   • F1 Score:  {test_metrics.get('eval_f1', 'N/A'):.3f}")
+    test_f1 = test_metrics.get("eval_f1", "N/A")
     summary_lines.append(
-        f"   • Precision: {test_metrics.get('eval_precision', 'N/A'):.3f}"
+        f"   • F1 Score:  {test_f1:.3f}"
+        if isinstance(test_f1, (int, float))
+        else f"   • F1 Score:  {test_f1}"
     )
+    test_prec = test_metrics.get("eval_precision", "N/A")
     summary_lines.append(
-        f"   • Recall:    {test_metrics.get('eval_recall', 'N/A'):.3f}"
+        f"   • Precision: {test_prec:.3f}"
+        if isinstance(test_prec, (int, float))
+        else f"   • Precision: {test_prec}"
+    )
+    test_recall = test_metrics.get("eval_recall", "N/A")
+    summary_lines.append(
+        f"   • Recall:    {test_recall:.3f}"
+        if isinstance(test_recall, (int, float))
+        else f"   • Recall:    {test_recall}"
     )
     summary_lines.append("")
     summary_lines.append("💾 MODEL ARTIFACTS:")
@@ -527,20 +556,11 @@ def main(cfg: DictConfig):
     except Exception:
         project_root = Path.cwd()
 
-    # Resolve Hydra run dir robustly; when missing, place runs under outputs/<job>/<timestamp>
-    try:
-        hydra_cfg = HydraConfig.get()
-        hydra_run_dir = Path(hydra_cfg.runtime.output_dir)
-    except Exception:
-        hydra_run_dir = None
-
-    if not hydra_run_dir or "None" in str(hydra_run_dir):
-        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        job = getattr(cfg, "mode", None)
-        job = job if job and job != "None" else "bert"
-        hydra_run_dir = project_root / "outputs" / job / ts
-
-    out_dir = Path(hydra_run_dir)
+    # Resolve run directory - hardcoded path, not controlled by Hydra config
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    job = getattr(cfg, "mode", None)
+    job = job if job and job != "None" else "bert"
+    out_dir = project_root / "multirun" / f"{job}_{ts}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Persist resolved config inside the run dir for reproducibility
@@ -626,7 +646,7 @@ def main(cfg: DictConfig):
         try:
             mlflow.set_tags(
                 {
-                    "hydra_run_dir": str(out_dir),
+                    "run_dir": str(out_dir),
                     "entry_script": "finetune_bert",
                     "git_sha": git_sha,
                 }

@@ -1,0 +1,24 @@
+# @package _global_
+# Parity settings approximating the reference train_bert_gcn.py
+
+gcn:
+  mix_factor: 0.7
+  gcn_layers: 2
+  n_hidden: 200
+  dropout: 0.5
+
+training:
+  lr: 0.001            # gcn_lr in original script
+  bert_lr: 0.00001     # bert_lr in original script
+  weight_decay: 0.0
+  epochs: 50
+  batch_size: 64
+  resume: false
+  freeze_features_after_init: false
+  overfit_debug: false
+  overfit_num_samples: 32
+  zero_word_features: true        # keep word nodes zero like the original
+  scheduler_type: multistep
+  multistep_milestones: [30]
+  multistep_gamma: 0.1
+  grad_clip_enabled: false
