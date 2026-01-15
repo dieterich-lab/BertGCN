@@ -296,6 +296,10 @@ class BertGCN(nn.Module):
             dropout=dropout,
         )
 
+        # Set remaining attributes
+        self.m = m
+        self.nb_class = nb_class
+
     def __getstate__(self):
         """Custom serialization for MLflow compatibility."""
         state = self.__dict__.copy()
@@ -816,7 +820,7 @@ def main(cfg: DictConfig) -> float:
         return tb.main.__wrapped__(cfg)
 
     # Use Hydra's run directory instead of manual creation
-    from hydra.core.hydra_configuration import HydraConfig
+    from hydra.core.hydra_config import HydraConfig
 
     run_dir = Path(HydraConfig.get().runtime.output_dir)
 
