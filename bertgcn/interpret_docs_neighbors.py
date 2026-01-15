@@ -376,23 +376,70 @@ def run_document_influence(cfg: DictConfig):
     )
     logger.info("2-hop neighbor scoring completed")
 
-    # Prepare output - only for document nodes
+    # Prepare output - create one row per document-neighbor pair for better analysis
     logger.info("Preparing output data...")
     rows: List[Dict] = []
+    
+    # Get ground truth labels if available
+    has_labels = hasattr(dataset, 'labels') and dataset.labels is not None
+    true_labels = dataset.labels if has_labels else None
+    
     for i, doc_idx in enumerate(doc_indices.tolist()):
         neigh_list = neighbor_scores[
             i
         ]  # Use i since neighbor_scores is indexed by position in doc_indices
-        rows.append(
-            {
-                "doc_id": doc_idx,
-                "pred_label": label_encoder.inverse_transform(
-                    [hybrid_probs[i].argmax().item()]
-                )[0],
-                "top_2hop_docs": [n for n, _ in neigh_list],
-                "hop2_scores": [s for _, s in neigh_list],
-            }
-        )
+        
+        # Get source document info
+        source_pred_class = hybrid_probs[i].argmax().item()
+        source_pred_label = label_encoder.inverse_transform([source_pred_class])[0]
+        source_confidence = hybrid_probs[i].max().item()
+        source_true_label = label_encoder.inverse_transform([true_labels[doc_idx]])[0] if has_labels else None
+        
+        # Create one row per neighbor (or one row for documents with no neighbors)
+        if not neigh_list:
+            rows.append({
+                "source_doc_id": doc_idx,
+                "source_pred_label": source_pred_label,
+                "source_pred_confidence": source_confidence,
+                "source_true_label": source_true_label,
+                "neighbor_rank": None,
+                "neighbor_doc_id": None,
+                "neighbor_score": None,
+                "neighbor_pred_label": None,
+                "neighbor_pred_confidence": None,
+                "neighbor_true_label": None,
+                "neighbor_same_class_as_source": None,
+            })
+        else:
+            for rank, (neigh_id, score) in enumerate(neigh_list, 1):
+                # Find the position of this neighbor in doc_indices to get hybrid_probs
+                try:
+                    neigh_pos = doc_indices.tolist().index(neigh_id)
+                    neigh_pred_class = hybrid_probs[neigh_pos].argmax().item()
+                    neigh_pred_label = label_encoder.inverse_transform([neigh_pred_class])[0]
+                    neigh_confidence = hybrid_probs[neigh_pos].max().item()
+                    neigh_true_label = label_encoder.inverse_transform([true_labels[neigh_id]])[0] if has_labels else None
+                    same_class = (source_pred_class == neigh_pred_class)
+                except (ValueError, IndexError):
+                    # Neighbor not in analyzed documents (shouldn't happen for 2-hop docs)
+                    neigh_pred_label = "unknown"
+                    neigh_confidence = 0.0
+                    neigh_true_label = None
+                    same_class = False
+                
+                rows.append({
+                    "source_doc_id": doc_idx,
+                    "source_pred_label": source_pred_label,
+                    "source_pred_confidence": source_confidence,
+                    "source_true_label": source_true_label,
+                    "neighbor_rank": rank,
+                    "neighbor_doc_id": neigh_id,
+                    "neighbor_score": score,
+                    "neighbor_pred_label": neigh_pred_label,
+                    "neighbor_pred_confidence": neigh_confidence,
+                    "neighbor_true_label": neigh_true_label,
+                    "neighbor_same_class_as_source": same_class,
+                })
 
     import pandas as pd
 
@@ -406,7 +453,7 @@ def run_document_influence(cfg: DictConfig):
     out_file = out_dir / "document_influence_2hop.csv"
     pd.DataFrame(rows).to_csv(out_file, index=False)
     logger.info(
-        f"Document-level 2-hop influence saved to {out_file} ({len(rows)} documents analyzed)"
+        f"Document-level 2-hop influence saved to {out_file} ({len(rows)} rows, {len(doc_indices)} documents analyzed)"
     )
 
 
