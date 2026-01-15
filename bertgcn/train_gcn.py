@@ -777,12 +777,9 @@ def main(cfg: DictConfig) -> float:
         return tb.main.__wrapped__(cfg)
 
     # Resolve run directory - hardcoded path, not controlled by Hydra config
-    # Use multirun structure for consistency but control it from script
-    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    job = getattr(cfg, "mode", None)
-    job = job if job and job != "None" else "gcn"
-    run_dir = project_root / "multirun" / f"{job}_{ts}"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    # Use Hydra's run directory instead of manual creation
+    from hydra.core.hydra_configuration import HydraConfig
+    run_dir = Path(HydraConfig.get().runtime.output_dir)
 
     # Save resolved config for reproducibility
     try:
@@ -816,7 +813,7 @@ def main(cfg: DictConfig) -> float:
     except Exception:
         git_sha = "unknown"
 
-    with mlflow.start_run(run_name=run_dir.name):
+    with mlflow.start_run(run_name=f"{cfg.mode}_{run_dir.name}"):
         # Log parameters
         mlflow.set_tag("run_dir", str(run_dir))
         mlflow.set_tag("git_sha", git_sha)

@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 from typing import Tuple
 
-import hydra
 import joblib
 import mlflow
 import numpy as np
@@ -17,6 +16,8 @@ from sklearn.metrics import accuracy_score, f1_score
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Subset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+import hydra
 
 from .train_bert import load_processed_dataset, split_dataset
 

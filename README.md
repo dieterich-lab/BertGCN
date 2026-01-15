@@ -203,11 +203,15 @@ outputs/
 └── gcn/
     ├── final_model/          # Best GCN model
     ├── interpret/            # Document-level interpretability outputs
-    └── multirun/<timestamp>/ # Legacy Hydra logs for sweeps (to be migrated)
+    └── [predictions]/        # Prediction outputs
 
 hydra/
-├── bert/
-│   └── runs/<timestamp>/     # Hydra logs for BERT single runs
+├── bert/                     # BERT training runs
+│   └── <timestamp>/          # Individual training runs
+├── gcn/                      # GCN training runs
+│   └── <timestamp>/          # Individual training runs
+└── inference/                # Prediction runs
+    └── <timestamp>/          # Individual prediction runs
 └── gcn/
     ├── runs/<timestamp>/     # Hydra logs for GCN single runs
     └── sweeps/<timestamp>/   # Hydra logs for GCN sweeps
