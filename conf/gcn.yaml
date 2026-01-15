@@ -2,10 +2,10 @@
 # Parity settings approximating the reference train_bert_gcn.py
 
 gcn:
-  mix_factor: 0.7
-  gcn_layers: 2
-  n_hidden: 200
-  dropout: 0.5
+  mix_factor: 0.5
+  gcn_layers: 3
+  n_hidden: 300
+  dropout: 0.3
 
 training:
   lr: 0.001            # gcn_lr in original script

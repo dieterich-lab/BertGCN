@@ -779,6 +779,7 @@ def main(cfg: DictConfig) -> float:
 
     # Use Hydra's run directory instead of manual creation
     from hydra.core.hydra_configuration import HydraConfig
+
     run_dir = Path(HydraConfig.get().runtime.output_dir)
 
     # Save resolved config for reproducibility
@@ -1191,9 +1192,8 @@ def main(cfg: DictConfig) -> float:
             # Save tokenizer (same as BERT tokenizer used)
             model.tokenizer.save_pretrained(final_model_dir)
 
-            # Save model config in transformers format
-            # Do not write a custom config.json with non-HF keys; rely on Hugging Face's own config
-            pass
+            # Save BERT model config in transformers format
+            model.bert_model.config.save_pretrained(final_model_dir)
 
             # Save training args for compatibility
             training_args = {
