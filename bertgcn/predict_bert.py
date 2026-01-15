@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from typing import Tuple
 
+import hydra
 import joblib
 import mlflow
 import numpy as np
@@ -16,8 +17,6 @@ from sklearn.metrics import accuracy_score, f1_score
 from sklearn.preprocessing import LabelEncoder
 from torch.utils.data import Subset
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
-import hydra
 
 from .train_bert import load_processed_dataset, split_dataset
 
@@ -185,6 +184,10 @@ def predict(cfg: DictConfig) -> None:
 
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: DictConfig):
+    # For inference scripts, disable Hydra run directory creation
+    # since we don't need persistent run directories for predictions
+    cfg.hydra.run.dir = ""
+
     # Allow legacy overrides that address keys not present in the base config
     OmegaConf.set_struct(cfg, False)
 
