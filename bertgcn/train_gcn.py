@@ -40,7 +40,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
-import hydra
 import joblib
 import mlflow
 import numpy as np
@@ -57,6 +56,8 @@ from torch.utils.data import DataLoader, TensorDataset
 from torch_geometric import nn as pyg_nn
 from torch_geometric.utils import dense_to_sparse
 from transformers import AutoModel, AutoTokenizer
+
+import hydra
 
 # Reuse the plain BERT finetuning pipeline when mix_factor=0 for parity.
 from bertgcn import train_bert as tb
@@ -776,7 +777,6 @@ def main(cfg: DictConfig) -> float:
         )
         return tb.main.__wrapped__(cfg)
 
-    # Resolve run directory - hardcoded path, not controlled by Hydra config
     # Use Hydra's run directory instead of manual creation
     from hydra.core.hydra_configuration import HydraConfig
     run_dir = Path(HydraConfig.get().runtime.output_dir)

@@ -27,7 +27,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Dict, Tuple
 
-import hydra
 import joblib
 import mlflow
 import numpy as np
@@ -48,6 +47,8 @@ from transformers import (
 )
 from transformers.data.data_collator import DataCollatorWithPadding
 from transformers.training_args import IntervalStrategy, SaveStrategy
+
+import hydra
 
 OmegaConf.register_new_resolver("basename", lambda p: Path(p).name)
 
@@ -558,6 +559,7 @@ def main(cfg: DictConfig):
 
     # Use Hydra's run directory instead of manual creation
     from hydra.core.hydra_configuration import HydraConfig
+
     out_dir = Path(HydraConfig.get().runtime.output_dir)
 
     # Persist resolved config inside the run dir for reproducibility
