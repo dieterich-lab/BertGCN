@@ -184,10 +184,6 @@ def predict(cfg: DictConfig) -> None:
 
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: DictConfig):
-    # For inference scripts, disable Hydra run directory creation
-    # since we don't need persistent run directories for predictions
-    cfg.hydra.run.dir = ""
-
     # Allow legacy overrides that address keys not present in the base config
     OmegaConf.set_struct(cfg, False)
 
