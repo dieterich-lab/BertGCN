@@ -280,15 +280,15 @@ BertGCN provides three approaches to explain predictions by identifying influent
 
 ### A. Neighbor Scoring (`poetry run interpret-docs-neighbors`)
 - Fast method using edge weights and GCN probabilities
-- Output: `hydra/gcn/interpret/document_influence.csv`
+- Output: `outputs/gcn/interpret/document_influence.csv`
 
 ### B. Integrated Gradients (`poetry run interpret-docs-ig`)
 - Gradient-based attribution over document features
-- Output: `hydra/gcn/interpret/document_influence_ig.csv`
+- Output: `outputs/gcn/interpret/document_influence_ig.csv`
 
 ### C. SHAP-style Perturbation (`poetry run interpret-docs-shap`)
 - Leave-one-out edge removal analysis
-- Output: `hydra/gcn/interpret/document_influence_shap.csv`
+- Output: `outputs/gcn/interpret/document_influence_shap.csv`
 
 Configure via `interpretation.top_k` (default 5) and other settings.
 

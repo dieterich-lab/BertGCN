@@ -8,7 +8,7 @@ aggregated path scores and return top-k influential documents.
 Run:
     poetry run python -m bertgcn.interpret_docs_neighbors
 Output:
-    hydra/gcn/interpret/document_influence_2hop.csv
+    outputs/gcn/interpret/document_influence_2hop.csv
 """
 
 from pathlib import Path
@@ -401,7 +401,7 @@ def run_document_influence(cfg: DictConfig):
     except ValueError:
         project_root = Path.cwd()
 
-    out_dir = project_root / "hydra" / "gcn" / "interpret"
+    out_dir = project_root / "outputs" / "gcn" / "interpret"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "document_influence_2hop.csv"
     pd.DataFrame(rows).to_csv(out_file, index=False)

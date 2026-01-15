@@ -8,7 +8,7 @@ edge perturbation).
 Usage:
     poetry run python -m bertgcn.interpret_docs_shap
 Output:
-    hydra/gcn/interpret/document_influence_shap.csv
+    outputs/gcn/interpret/document_influence_shap.csv
 Config:
     interpretation.top_k (default 5), interpretation.max_docs (optional)
 """
@@ -136,7 +136,7 @@ def run_document_shap(cfg: DictConfig):
     import pandas as pd
 
     project_root = Path(get_original_cwd())
-    out_dir = project_root / "hydra" / "gcn" / "interpret"
+    out_dir = project_root / "outputs" / "gcn" / "interpret"
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / "document_influence_shap.csv"
     pd.DataFrame(rows).to_csv(out_file, index=False)
