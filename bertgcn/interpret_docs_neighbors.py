@@ -7,12 +7,9 @@ from omegaconf import DictConfig, OmegaConf
 
 import hydra
 from bertgcn.core import get_logger
-from bertgcn.train_gcn import (
-    BertGCN,
-    SimpleGCN,
-    load_graph_data_from_disk,
-    load_processed_dataset,
-)
+from bertgcn.train_gcn import load_graph_data_from_disk, load_processed_dataset
+
+logger = get_logger(__name__)
 
 try:
     import numpy as np
@@ -22,8 +19,6 @@ try:
 except ImportError:
     SCIPY_AVAILABLE = False
     logger.warning("scipy not available, falling back to slower implementation")
-
-logger = get_logger(__name__)
 
 
 def _resolve_model_dir(cfg: DictConfig) -> Path:
@@ -92,13 +87,15 @@ def _resolve_model_dir(cfg: DictConfig) -> Path:
     return fallback
 
 
-def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
+def _load_model(cfg: DictConfig, n_classes: int, n_features: int):
     # Load complete BERT+GCN model from clean MLflow artifact structure
     logger.info("Loading complete BERT+GCN model from MLflow artifacts...")
     model_dir = _resolve_model_dir(cfg)
 
     try:
         from transformers import AutoModel, AutoTokenizer
+
+        from bertgcn.train_gcn import BertGCN
 
         # Load BERT model and tokenizer using standard HF loading
         tokenizer = AutoTokenizer.from_pretrained(model_dir)
@@ -137,58 +134,6 @@ def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
         raise RuntimeError(
             "Model artifacts are incomplete or corrupted. Please retrain with the updated saving code."
         ) from e
-
-
-def _compute_neighbor_scores(
-    probs: torch.Tensor,
-    edge_index: torch.Tensor,
-    edge_weight: torch.Tensor,
-    top_k: int,
-    node_indices: List[int] = None,
-    doc_mask: torch.Tensor = None,
-) -> List[List[Tuple[int, float]]]:
-    """Compute top-k influential neighbors per node for its predicted class.
-
-    For documents: only consider word neighbors (TF-IDF edges)
-    For words: consider both word neighbors (PMI) and document neighbors (TF-IDF)
-
-    probs: [N, C] softmax probabilities from GCN.
-    edge_index: [2, E]
-    edge_weight: [E]
-    node_indices: if provided, only compute for these nodes
-    doc_mask: boolean mask indicating which nodes are documents
-    Returns list of length len(node_indices) with (neighbor_id, score) sorted desc.
-    """
-
-    n_nodes = probs.size(0)
-    pred_class = probs.argmax(dim=1)
-
-    # Build adjacency mapping from edge_index: incoming edges to target (dst)
-    incoming = [[] for _ in range(n_nodes)]
-    src, dst = edge_index
-    for s, d, w in zip(src.tolist(), dst.tolist(), edge_weight.tolist()):
-        incoming[d].append((s, w))
-
-    if node_indices is None:
-        node_indices = list(range(n_nodes))
-
-    results: List[List[Tuple[int, float]]] = []
-    for node in node_indices:
-        c = pred_class[node].item()
-        neigh_scores: List[Tuple[int, float]] = []
-        for neigh, w in incoming[node]:
-            # For document nodes, only consider word neighbors (TF-IDF edges)
-            if doc_mask is not None and doc_mask[node] and doc_mask[neigh]:
-                continue  # Skip document-document edges
-
-            if doc_mask is not None and doc_mask[neigh]:  # Document neighbor
-                score = w * float(probs[neigh, c])
-            else:  # Word neighbor - use edge weight (TF-IDF or PMI)
-                score = w
-            neigh_scores.append((neigh, score))
-        # sort and trim
-        neigh_scores.sort(key=lambda x: x[1], reverse=True)
-        results.append(neigh_scores[:top_k])
 
 
 def _compute_2hop_neighbor_scores_optimized(
