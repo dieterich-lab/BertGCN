@@ -276,7 +276,7 @@ Compare runs across BERT and GCN experiments, download models, and analyze perfo
 
 ## 🧭 Document-Level Interpretability for Precedents Detection
 
-BertGCN provides three approaches to explain predictions by identifying influential documents (precedents):
+BertGCN provides multiple approaches to explain predictions by identifying influential documents (precedents):
 
 ### A. Neighbor Scoring (`poetry run interpret-docs-neighbors`)
 - Fast method using edge weights and GCN probabilities
@@ -294,7 +294,26 @@ BertGCN provides three approaches to explain predictions by identifying influent
 - **Document-Only Attribution**: Filters to only consider document-to-document edges, excluding word nodes from the analysis
 - **Output**: `outputs/gcn/interpret/document_influence_shap.csv` with neighbor importance scores
 
-Configure via `interpretation.top_k` (default 5) and other settings.
+### D. Token-Level Attribution (`poetry run interpret-tokens-ig`)
+- **Word-Level Importance**: Computes Integrated Gradients at the token level to identify which individual words/tokens are most important for classification decisions
+- **Clinical Relevance**: Helps understand what specific terms drive medical classifications
+- **Output**: `outputs/gcn/interpret/token_influence_ig.csv` with top tokens and their attribution scores per document
+
+### E. Smart Precedent Selection (`poetry run select-precedents`)
+- **Hierarchical Selection**: First identifies top N most influential documents, then extracts their most important sentences
+- **Clinical Evaluation Ready**: Provides focused, sentence-level precedents perfect for doctor evaluation
+- **Configurable**: Set `interpretation.top_docs` (default 3) and `interpretation.top_sentences_per_doc` (default 2)
+- **Output**: `outputs/gcn/interpret/smart_precedents.csv` with ranked precedents and key sentences
+- **Doctor Evaluation**: Exports samples in `doctor_evaluation_sample.csv` for clinical relevance assessment
+
+Configure via `interpretation.top_k` (default 5) and other settings in `conf/config.yaml`.
+
+### Analysis Notebook
+Run `notebooks/analyze_interpretation_statistics.ipynb` to:
+- Analyze document influence patterns and class relationships
+- Visualize token importance distributions
+- Review smart precedent selections
+- Export evaluation samples for clinical assessment
 
 ---
 
