@@ -139,6 +139,7 @@ def integrated_gradients(
     target_idx: int,
     target_class: int,
     steps: int = 16,
+    debug: bool = False,
 ) -> torch.Tensor:
     """Compute IG attributions over all document features for a target doc/class.
 
@@ -150,17 +151,34 @@ def integrated_gradients(
     edge_index = data["edge_index"]
     edge_weight = data.get("edge_weight")
 
+    if debug:
+        print(
+            f"Debug: features mean={features.mean().item():.6f}, std={features.std().item():.6f}, shape={features.shape}"
+        )
+        print(f"Debug: features[0][:10] = {features[0][:10].tolist()}")
+
     total_grad = torch.zeros_like(features)
-    for alpha in torch.linspace(0.0, 1.0, steps):
+    for i, alpha in enumerate(torch.linspace(0.0, 1.0, steps)):
         x = (baseline + alpha * (features - baseline)).clone().requires_grad_(True)
         # Forward only for GCN
         log_probs = model.gcn(x, edge_index, edge_weight)
         logit = log_probs[target_idx, target_class]
         logit.backward(retain_graph=True)
+        if debug and i == 0:
+            print(
+                f"Debug: alpha={alpha.item():.3f}, logit={logit.item():.6f}, x.grad sum={x.grad.sum().item():.6f}"
+            )
         total_grad += x.grad.detach()
 
     avg_grad = total_grad / steps
     ig = (features - baseline) * avg_grad
+    if debug:
+        print(
+            f"Debug: avg_grad mean={avg_grad.mean().item():.6f}, std={avg_grad.std().item():.6f}"
+        )
+        print(
+            f"Debug: ig abs sum={ig.abs().sum().item():.6f}, ig sum={ig.sum().item():.6f}"
+        )
     return ig
 
 
@@ -178,10 +196,44 @@ def run_document_ig(cfg: DictConfig):
         k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in data.items()
     }
 
+    # Load tokenizer to decode texts
+    model_dir = _resolve_model_dir(cfg)
+    from transformers import AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(model_dir)
+
+    # Decode texts from input_ids
+    texts = [
+        tokenizer.decode(ids, skip_special_tokens=True) for ids in dataset["input_ids"]
+    ]
+
     # Model
     model = _load_model(
         cfg, n_classes=n_classes, n_features=data["features"].shape[1]
     ).to(device)
+
+    # Compute correct features from BERT
+    print("Computing BERT features for documents...")
+    model = model.to(device)
+    features_list = []
+    for text in texts:
+        inputs = tokenizer(
+            text,
+            return_tensors="pt",
+            max_length=512,
+            truncation=True,
+            padding="max_length",
+        ).to(device)
+        with torch.no_grad():
+            outputs = model.bert_model(**inputs)
+            embedding = outputs.last_hidden_state[:, 0, :].squeeze(0)
+        features_list.append(embedding.cpu())
+    features_doc = torch.stack(features_list)
+    n_docs = len(dataset)
+    n_nodes = data["features"].shape[0]
+    features = torch.zeros(n_nodes, 768)
+    features[:n_docs] = features_doc
+    data["features"] = features.to(device)
 
     # Predictions
     with torch.no_grad():
@@ -197,9 +249,14 @@ def run_document_ig(cfg: DictConfig):
     rows: List[Dict] = []
     for idx in target_nodes:
         c = pred_class[idx].item()
-        ig = integrated_gradients(model, data, idx, c)  # (N, D)
+        ig = integrated_gradients(model, data, idx, c, debug=(idx < 3))  # (N, D)
         # aggregate per document
         doc_scores = ig.sum(dim=1).cpu()
+        if idx < 3:
+            top_vals, top_inds = doc_scores.topk(10)
+            print(
+                f"Debug idx {idx}: doc_scores max={doc_scores.max().item():.10f}, top 5 values: {[f'{v:.10f}' for v in top_vals.tolist()[:5]]}, inds: {top_inds.tolist()[:5]}"
+            )
         # zero out self to avoid trivial self-importance dominating
         doc_scores[idx] = 0.0
         # take top_k
