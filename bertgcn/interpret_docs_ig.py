@@ -216,7 +216,7 @@ def run_document_ig(cfg: DictConfig):
     print("Computing BERT features for documents...")
     model = model.to(device)
     features_list = []
-    for text in texts:
+    for i, text in enumerate(texts):
         inputs = tokenizer(
             text,
             return_tensors="pt",
@@ -228,6 +228,8 @@ def run_document_ig(cfg: DictConfig):
             outputs = model.bert_model(**inputs)
             embedding = outputs.last_hidden_state[:, 0, :].squeeze(0)
         features_list.append(embedding.cpu())
+        if (i + 1) % 100 == 0:
+            print(f"Processed {i + 1}/{len(texts)} documents for features")
     features_doc = torch.stack(features_list)
     n_docs = len(dataset)
     n_nodes = data["features"].shape[0]
@@ -247,7 +249,7 @@ def run_document_ig(cfg: DictConfig):
     target_nodes = range(n_nodes if max_docs is None else min(max_docs, n_nodes))
 
     rows: List[Dict] = []
-    for idx in target_nodes:
+    for i, idx in enumerate(target_nodes):
         c = pred_class[idx].item()
         ig = integrated_gradients(model, data, idx, c, debug=(idx < 3))  # (N, D)
         # aggregate per document
@@ -269,6 +271,8 @@ def run_document_ig(cfg: DictConfig):
                 "neighbor_scores": [float(v) for v in vals],
             }
         )
+        if (i + 1) % 100 == 0:
+            print(f"Processed IG for {i + 1}/{len(target_nodes)} documents")
 
     import pandas as pd
 
