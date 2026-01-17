@@ -213,7 +213,7 @@ def run_document_ig(cfg: DictConfig):
     ).to(device)
 
     # Compute correct features from BERT
-    print("Computing BERT features for documents...")
+    print("Computing BERT features for documents...", flush=True)
     model = model.to(device)
     features_list = []
     for i, text in enumerate(texts):
@@ -229,7 +229,7 @@ def run_document_ig(cfg: DictConfig):
             embedding = outputs.last_hidden_state[:, 0, :].squeeze(0)
         features_list.append(embedding.cpu())
         if (i + 1) % 100 == 0:
-            print(f"Processed {i + 1}/{len(texts)} documents for features")
+            print(f"Processed {i + 1}/{len(texts)} documents for features", flush=True)
     features_doc = torch.stack(features_list)
     n_docs = len(dataset)
     n_nodes = data["features"].shape[0]
@@ -257,7 +257,8 @@ def run_document_ig(cfg: DictConfig):
         if idx < 3:
             top_vals, top_inds = doc_scores.topk(10)
             print(
-                f"Debug idx {idx}: doc_scores max={doc_scores.max().item():.10f}, top 5 values: {[f'{v:.10f}' for v in top_vals.tolist()[:5]]}, inds: {top_inds.tolist()[:5]}"
+                f"Debug idx {idx}: doc_scores max={doc_scores.max().item():.10f}, top 5 values: {[f'{v:.10f}' for v in top_vals.tolist()[:5]]}, inds: {top_inds.tolist()[:5]}",
+                flush=True,
             )
         # zero out self to avoid trivial self-importance dominating
         doc_scores[idx] = 0.0
@@ -272,7 +273,7 @@ def run_document_ig(cfg: DictConfig):
             }
         )
         if (i + 1) % 100 == 0:
-            print(f"Processed IG for {i + 1}/{len(target_nodes)} documents")
+            print(f"Processed IG for {i + 1}/{len(target_nodes)} documents", flush=True)
 
     import pandas as pd
 
