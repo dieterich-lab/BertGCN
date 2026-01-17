@@ -66,7 +66,8 @@
 
 ---
 
-## 🚀 Installation {#installation}
+<a id="installation"></a>
+## 🚀 Installation
 
 **Requirements:**
 
@@ -85,7 +86,8 @@ This installs all dependencies via Poetry and sets up the environment.
 
 ---
 
-## ⚡ Quick Start {#quick-start}
+<a id="quick-start"></a>
+## ⚡ Quick Start
 
 Run the full pipeline with default settings:
 
@@ -113,7 +115,8 @@ Models are saved in `outputs/`, Hydra configs in `hydra/`, and experiments track
 
 ---
 
-## 🔄 Workflow Overview {#workflow-overview}
+<a id="workflow-overview"></a>
+## 🔄 Workflow Overview
 
 BertGCN follows a sequential pipeline:
 
@@ -151,7 +154,8 @@ BertGCN follows a sequential pipeline:
 
 ---
 
-## ⚙️ Configuration Management {#configuration-management}
+<a id="configuration-management"></a>
+## ⚙️ Configuration Management
 
 BertGCN uses Hydra for flexible configuration. All configs are in `conf/`:
 
@@ -205,7 +209,8 @@ poetry run train-bertgcn --config-path experiments/my_experiment
 
 ---
 
-## 🔍 Running Experiments and Sweeps {#running-experiments-and-sweeps}
+<a id="running-experiments-and-sweeps"></a>
+## 🔍 Running Experiments and Sweeps
 
 ### Single Runs
 
@@ -235,7 +240,8 @@ poetry run train-bertgcn --multirun \
 
 ---
 
-## 📂 Model Organization {#model-organization}
+<a id="model-organization"></a>
+## 📂 Model Organization
 
 Models are saved in `outputs/` directories, Hydra configs in `hydra/`, and experiments tracked in `mlruns/`:
 
@@ -281,7 +287,8 @@ Each sweep job creates its own `<timestamp>/` directory under `hydra/gcn/sweeps/
 
 ---
 
-## 📈 MLflow Tracking {#mlflow-tracking}
+<a id="mlflow-tracking"></a>
+## 📈 MLflow Tracking
 
 All experiments are tracked in a single canonical MLflow store at `mlruns/` in the project root:
 
@@ -319,7 +326,8 @@ Compare runs across BERT and GCN experiments, download models, and analyze perfo
 
 ---
 
-## 🧠 Advanced Multi-Level Interpretability Framework {#interpretability}
+<a id="interpretability"></a>
+## 🧠 Advanced Multi-Level Interpretability Framework
 
 BertGCN pioneers **hierarchical interpretability** - the first framework to provide attribution at document, sentence, and token levels simultaneously. This breakthrough enables unprecedented transparency in clinical AI decision-making.
 
@@ -394,7 +402,8 @@ Unlike traditional XAI methods that provide abstract feature importance, BertGCN
 
 ---
 
-## 🧪 Testing {#testing}
+<a id="testing"></a>
+## 🧪 Testing
 
 Run the test suite:
 
@@ -406,7 +415,8 @@ Tests cover config behavior, graph building, and training stability.
 
 ---
 
-## 🤝 Contributing {#contributing}
+<a id="contributing"></a>
+## 🤝 Contributing
 
 1. Fork the repository
 2. Create feature branch
