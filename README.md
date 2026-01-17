@@ -284,6 +284,8 @@ BertGCN provides three approaches to explain predictions by identifying influent
 
 ### B. Integrated Gradients (`poetry run interpret-docs-ig`)
 - Gradient-based attribution over document features
+- Custom implementation (no external XAI library used)
+- Interpolates between zero baseline and actual document embeddings, computing gradients through the GCN
 - Output: `outputs/gcn/interpret/document_influence_ig.csv`
 
 ### C. SHAP-style Perturbation (`poetry run interpret-docs-shap`)
