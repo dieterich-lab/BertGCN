@@ -66,7 +66,7 @@
 
 ---
 
-## 🚀 Installation
+## 🚀 Installation {#installation}
 
 **Requirements:**
 
@@ -85,7 +85,7 @@ This installs all dependencies via Poetry and sets up the environment.
 
 ---
 
-## ⚡ Quick Start
+## ⚡ Quick Start {#quick-start}
 
 Run the full pipeline with default settings:
 
@@ -113,7 +113,7 @@ Models are saved in `outputs/`, Hydra configs in `hydra/`, and experiments track
 
 ---
 
-## 🔄 Workflow Overview
+## 🔄 Workflow Overview {#workflow-overview}
 
 BertGCN follows a sequential pipeline:
 
@@ -151,7 +151,7 @@ BertGCN follows a sequential pipeline:
 
 ---
 
-## ⚙️ Configuration Management
+## ⚙️ Configuration Management {#configuration-management}
 
 BertGCN uses Hydra for flexible configuration. All configs are in `conf/`:
 
@@ -205,7 +205,7 @@ poetry run train-bertgcn --config-path experiments/my_experiment
 
 ---
 
-## 🔍 Running Experiments and Sweeps
+## 🔍 Running Experiments and Sweeps {#running-experiments-and-sweeps}
 
 ### Single Runs
 
@@ -235,7 +235,7 @@ poetry run train-bertgcn --multirun \
 
 ---
 
-## 📂 Model Organization
+## 📂 Model Organization {#model-organization}
 
 Models are saved in `outputs/` directories, Hydra configs in `hydra/`, and experiments tracked in `mlruns/`:
 
@@ -281,7 +281,7 @@ Each sweep job creates its own `<timestamp>/` directory under `hydra/gcn/sweeps/
 
 ---
 
-## 📈 MLflow Tracking
+## 📈 MLflow Tracking {#mlflow-tracking}
 
 All experiments are tracked in a single canonical MLflow store at `mlruns/` in the project root:
 
@@ -319,7 +319,7 @@ Compare runs across BERT and GCN experiments, download models, and analyze perfo
 
 ---
 
-## � Advanced Multi-Level Interpretability Framework
+## 🧠 Advanced Multi-Level Interpretability Framework {#interpretability}
 
 BertGCN pioneers **hierarchical interpretability** - the first framework to provide attribution at document, sentence, and token levels simultaneously. This breakthrough enables unprecedented transparency in clinical AI decision-making.
 
@@ -394,7 +394,7 @@ Unlike traditional XAI methods that provide abstract feature importance, BertGCN
 
 ---
 
-## 🧪 Testing
+## 🧪 Testing {#testing}
 
 Run the test suite:
 
@@ -406,7 +406,7 @@ Tests cover config behavior, graph building, and training stability.
 
 ---
 
-## 🤝 Contributing
+## 🤝 Contributing {#contributing}
 
 1. Fork the repository
 2. Create feature branch
