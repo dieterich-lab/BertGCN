@@ -1249,6 +1249,26 @@ def main(cfg: DictConfig) -> float:
             mlflow.log_artifacts(str(model_dir), artifact_path="final_model")
             logger.info("💾 Complete BertGCN model logged to MLflow as clean artifacts")
 
+        # Respect cfg.training.keep_local_copy if present
+        keep_local = getattr(cfg.training, "keep_local_copy", False)
+        if keep_local:
+            final_dir = project_root / "models" / "final_model"
+            final_dir.mkdir(parents=True, exist_ok=True)
+            # Save BERT model and tokenizer
+            model.bert_model.save_pretrained(final_dir)
+            model.tokenizer.save_pretrained(final_dir)
+            # Save GCN components
+            torch.save(
+                {
+                    "gcn": model.gcn.state_dict(),
+                    "classifier": model.classifier.state_dict(),
+                    "m": model.m,
+                    "nb_class": model.nb_class,
+                },
+                final_dir / "gcn_components.pt",
+            )
+            logger.info("✓ Local model copy saved")
+
         logger.info(f"💾 Final BertGCN model logged to MLflow (artifact: final_model)")
 
         # Log comprehensive training summary

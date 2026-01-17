@@ -15,7 +15,7 @@ training:
   batch_size: 64
   resume: false
   freeze_features_after_init: false
-  overfit_debug: false    # limit to a tiny subset and reuse it for val/test
+  overfit_debug: true    # limit to a tiny subset and reuse it for val/test
   overfit_num_samples: 32 # number of train samples to overfit on when enabled
   zero_word_features: true      # keep word nodes at zero (parity with original) when true
   scheduler_type: linear_warmup  # linear_warmup (default) or multistep
@@ -23,3 +23,4 @@ training:
   multistep_gamma: 0.1
   grad_clip_enabled: true
   early_stopping_patience: 5
+  keep_local_copy: true
