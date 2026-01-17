@@ -2,7 +2,7 @@
 
 **🏆 Cutting-Edge Framework:** BertGCN pioneers **hierarchical interpretability** in clinical AI, combining BERT-based Graph Convolutional Networks with multi-level attribution methods. Our framework uniquely provides **document-level**, **sentence-level**, and **token-level** explanations, enabling unprecedented transparency in medical document classification and precedent-based reasoning.
 
-**🎯 Clinical Impact:** Unlike traditional "black-box" AI models, BertGCN generates **clinically actionable insights** through smart precedent selection - identifying the most influential documents and their key sentences for doctor evaluation. This breakthrough enables evidence-based model validation and clinical decision support.
+**🎯 Clinical Impact:** Unlike traditional "black-box" AI models, BertGCN generates **clinically actionable insights** through smart precedent selection - identifying the most influential documents and their key sentences for enabling doctor evaluation. This breakthrough enables evidence-based model validation and clinical decision support.
 
 **🔬 Technical Innovation:** Features advanced attribution techniques including Integrated Gradients at multiple granularities, SHAP-style edge perturbation, and hierarchical precedent extraction. Perfect for medical diagnostics, legal analysis, and any domain requiring explainable document classification with clinical validation.
 
@@ -58,7 +58,7 @@
 - Clinical terminology validation
 
 ### Clinical Validation Framework
-- **Evidence-Based Assessment**: Doctors evaluate model decisions using extracted precedents
+- **Evidence-Based Assessment**: Enabling doctors to evaluate model decisions using extracted precedents
 - **Clinical Relevance Metrics**: Quantifiable measures of medical utility
 - **Regulatory Compliance**: Transparent AI for healthcare applications
 
@@ -383,7 +383,7 @@ Run `notebooks/analyze_interpretation_statistics.ipynb` to:
 
 ### Medical Decision Support
 - **Transparent Diagnostics**: Understand which clinical precedents influence AI classifications
-- **Evidence-Based Validation**: Doctors can evaluate if model decisions align with medical knowledge
+- **Evidence-Based Validation**: Enabling doctors to evaluate if model decisions align with medical knowledge
 - **Regulatory Compliance**: Explainable AI for healthcare accreditation (FDA, EU AI Act)
 
 ### Research & Validation Workflow
@@ -393,7 +393,7 @@ Run `notebooks/analyze_interpretation_statistics.ipynb` to:
 4. **Iterative Improvement**: Refine models based on expert feedback
 
 ### Real-World Deployment
-- **UKHD Integration**: Ready for University Hospital Düsseldorf clinical workflows
+- **UKHD Integration**: Ready for Universitätsklinikum Heidelberg clinical workflows
 - **Scalable Attribution**: Production-optimized explanation methods
 - **Multi-Stakeholder Validation**: Clinicians, researchers, and regulators can all assess model decisions
 
@@ -441,6 +441,6 @@ If you use BertGCN in your research, please cite:
 
 ### Key Contributions
 - **Hierarchical Interpretability**: First framework providing multi-level attribution (document → sentence → token)
-- **Clinical Precedent Intelligence**: Smart extraction of medically relevant precedents for doctor evaluation
+- **Clinical Precedent Intelligence**: Smart extraction of medically relevant precedents enabling doctor evaluation
 - **Production-Ready XAI**: Scalable attribution methods for real-world clinical deployment
 - **Evidence-Based Validation**: Framework for clinical assessment of AI decision-making
