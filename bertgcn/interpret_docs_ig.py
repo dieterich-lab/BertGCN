@@ -246,7 +246,7 @@ def run_document_ig(cfg: DictConfig):
         pred_class = probs.argmax(dim=1)
 
     n_nodes = data["features"].shape[0]
-    target_nodes = range(n_nodes if max_docs is None else min(max_docs, n_nodes))
+    target_nodes = range(n_docs if max_docs is None else min(max_docs, n_docs))
 
     rows: List[Dict] = []
     for i, idx in enumerate(target_nodes):

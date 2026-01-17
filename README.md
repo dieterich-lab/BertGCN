@@ -289,8 +289,10 @@ BertGCN provides three approaches to explain predictions by identifying influent
 - Output: `outputs/gcn/interpret/document_influence_ig.csv`
 
 ### C. SHAP-style Perturbation (`poetry run interpret-docs-shap`)
-- Leave-one-out edge removal analysis
-- Output: `outputs/gcn/interpret/document_influence_shap.csv`
+- **Leave-One-Out (LOO) Edge Perturbation**: For each target document, systematically removes each incoming edge from neighboring documents and measures the change in prediction probability
+- **Computational Optimization**: Instead of expensive kernel SHAP (2^k coalitions), uses efficient edge-level perturbations that give exact Shapley values under feature independence assumptions
+- **Document-Only Attribution**: Filters to only consider document-to-document edges, excluding word nodes from the analysis
+- **Output**: `outputs/gcn/interpret/document_influence_shap.csv` with neighbor importance scores
 
 Configure via `interpretation.top_k` (default 5) and other settings.
 
