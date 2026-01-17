@@ -21,18 +21,57 @@ from hydra.utils import get_original_cwd
 from omegaconf import DictConfig, OmegaConf
 
 import hydra
+from bertgcn.core import get_logger
+
+logger = get_logger(__name__)
 from bertgcn.train_gcn import BertGCN, load_graph_data_from_disk, load_processed_dataset
 
 
 def _resolve_model_dir(cfg: DictConfig) -> Path:
-    """Pick model_dir in priority: cfg.interpretation.model_dir -> newest hydra/gcn/**/final_model -> models/final_model."""
+    """Pick model_dir in priority: cfg.interpretation.model_dir -> MLflow artifacts -> hydra/gcn/**/final_model -> models/final_model."""
 
-    project_root = Path(get_original_cwd())
+    try:
+        project_root = Path(get_original_cwd())
+    except ValueError:
+        # Fallback when not running under Hydra
+        project_root = Path.cwd()
+
     interp = cfg.get("interpretation", {}) if hasattr(cfg, "get") else {}
     explicit = interp.get("model_dir") if isinstance(interp, dict) else None
     if explicit:
-        return (project_root / explicit).expanduser().resolve()
+        model_dir = (project_root / explicit).expanduser().resolve()
+        print(f"Using explicitly configured model directory: {model_dir}")
+        return model_dir
 
+    # Try to find latest model from MLflow artifacts
+    logger.info("Looking for latest GCN model in MLflow...")
+    try:
+        import mlflow
+
+        client = mlflow.tracking.MlflowClient()
+        exp_name = "train_gcn"
+        exp = client.get_experiment_by_name(exp_name)
+        if exp is not None:
+            runs = client.search_runs(
+                exp.experiment_id,
+                "attributes.status = 'FINISHED'",
+                order_by=["attributes.start_time DESC"],
+                max_results=1,
+            )
+            if runs:
+                run = runs[0]
+                artifact_path = "final_model"
+                model_dir = Path(
+                    mlflow.artifacts.download_artifacts(
+                        run_id=run.info.run_id, artifact_path=artifact_path
+                    )
+                )
+                logger.info(f"Found GCN model in MLflow run {run.info.run_id[:8]}...")
+                return model_dir
+    except Exception as e:
+        logger.warning(f"MLflow search failed: {e}")
+
+    # Fallback to hydra/gcn/**/final_model
     try:
         candidates = sorted(
             (p for p in project_root.glob("hydra/gcn/**/final_model")),
@@ -45,28 +84,53 @@ def _resolve_model_dir(cfg: DictConfig) -> Path:
     fallback = project_root / "models" / "final_model"
     for cand in candidates + [fallback]:
         if cand.is_dir():
+            logger.info(f"Using fallback model directory: {cand}")
             return cand
+    logger.warning(f"Using final fallback: {fallback}")
     return fallback
 
 
 def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
-    model = BertGCN(
-        pretrained_model=cfg.hparams.model_name_or_path,
-        nb_class=n_classes,
-        m=cfg.gcn.mix_factor,
-        gcn_layers=cfg.gcn.gcn_layers,
-        n_hidden=cfg.gcn.n_hidden,
-        dropout=cfg.gcn.dropout,
-    )
+    # Load complete BERT+GCN model from clean MLflow artifact structure
+    logger.info("Loading complete BERT+GCN model from MLflow artifacts...")
     model_dir = _resolve_model_dir(cfg)
-    ckpt_path = model_dir / "pytorch_model.bin"
-    if ckpt_path.exists():
-        state = torch.load(ckpt_path, map_location="cpu")
-        model.load_state_dict(state, strict=False)
-    else:
-        raise FileNotFoundError(f"Model checkpoint not found at {ckpt_path}")
-    model.eval()
-    return model
+
+    try:
+        from transformers import AutoModel, AutoTokenizer
+
+        # Load BERT model and tokenizer using standard HF loading
+        tokenizer = AutoTokenizer.from_pretrained(model_dir)
+        bert_model = AutoModel.from_pretrained(model_dir)
+        feat_dim = bert_model.config.hidden_size
+
+        # Load GCN components from the single state dict file
+        gcn_checkpoint = torch.load(model_dir / "gcn_components.pt", map_location="cpu")
+        m = gcn_checkpoint["m"]
+        nb_class = gcn_checkpoint["nb_class"]
+
+        # Create BertGCN model using the "loading from saved state" path
+        model = BertGCN(
+            bert_model=bert_model,
+            tokenizer=tokenizer,
+            feat_dim=feat_dim,
+            nb_class=nb_class,
+            m=m,
+            gcn_layers=1,  # dummy value, will be overridden
+            n_hidden=cfg.gcn.n_hidden,
+            dropout=cfg.gcn.dropout,
+        )
+
+        # Load the saved weights
+        model.classifier.load_state_dict(gcn_checkpoint["classifier"])
+        model.gcn.load_state_dict(gcn_checkpoint["gcn"])
+
+        logger.info("✓ Loaded complete BERT+GCN model from clean MLflow artifacts")
+        model.eval()
+        return model
+
+    except Exception as e:
+        logger.error(f"Failed to load from MLflow artifacts: {e}")
+        raise
 
 
 def integrated_gradients(
