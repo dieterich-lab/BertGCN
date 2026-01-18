@@ -72,48 +72,39 @@ def integrated_gradients_tokens(
         print(f"Debug: baseline_ids[:10] = {baseline_ids[0][:10].tolist()}")
         print(f"Debug: pad_token_id = {pad_token_id}")
 
-    # Get full BERT outputs for actual and baseline inputs
+    # Get embeddings for actual and baseline inputs
     with torch.no_grad():
-        actual_outputs = model.bert_model(
-            input_ids=input_ids, attention_mask=attention_mask
-        )
-        baseline_outputs = model.bert_model(
-            input_ids=baseline_ids, attention_mask=baseline_mask
-        )
+        actual_embeddings = model.bert_model.embeddings(input_ids)
+        baseline_embeddings = model.bert_model.embeddings(baseline_ids)
 
-    total_grad = torch.zeros_like(actual_outputs.last_hidden_state)
+    total_grad = torch.zeros_like(actual_embeddings)
 
     for i, alpha in enumerate(torch.linspace(0.0, 1.0, steps)):
-        # Interpolate between baseline and actual hidden states at token level
-        interpolated_hidden = (
-            (
-                baseline_outputs.last_hidden_state
-                + alpha
-                * (
-                    actual_outputs.last_hidden_state
-                    - baseline_outputs.last_hidden_state
-                )
-            )
-            .clone()
-            .requires_grad_(True)
+        # Interpolate between baseline and actual embeddings at token level
+        interpolated_embeddings = (
+            baseline_embeddings + alpha * (actual_embeddings - baseline_embeddings)
+        ).clone().requires_grad_(True)
+
+        # Forward pass: run interpolated embeddings through FULL BERT + classifier
+        bert_outputs = model.bert_model(
+            inputs_embeds=interpolated_embeddings,
+            attention_mask=attention_mask
         )
 
-        # Forward pass: use interpolated [CLS] token through classifier
-        # Note: This is an approximation since we skip the GCN graph processing
-        cls_embedding = interpolated_hidden[:, 0, :]
+        # Get [CLS] token and run through classifier
+        cls_embedding = bert_outputs.last_hidden_state[:, 0, :]
         logits = model.classifier(cls_embedding)
         logit = logits[0, target_class]
 
+        # Compute gradients w.r.t. interpolated embeddings
         logit.backward(retain_graph=True)
-        total_grad += interpolated_hidden.grad.detach()
+        total_grad += interpolated_embeddings.grad.detach()
 
         if debug and i == 0:
             print(f"Debug: alpha={alpha.item():.3f}, logit={logit.item():.6f}")
 
     avg_grad = total_grad / steps
-    ig_attributions = (
-        actual_outputs.last_hidden_state - baseline_outputs.last_hidden_state
-    ) * avg_grad
+    ig_attributions = (actual_embeddings - baseline_embeddings) * avg_grad
 
     # Sum over embedding dimensions to get token-level scores
     token_scores = ig_attributions.sum(dim=-1).squeeze(0)  # (seq_len,)
