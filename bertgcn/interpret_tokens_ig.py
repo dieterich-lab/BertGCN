@@ -11,9 +11,9 @@ Config:
     interpretation.top_k (default 5), interpretation.max_docs (optional)
 """
 
+import re
 from pathlib import Path
 from typing import Dict, List, Tuple
-import re
 
 import torch
 from hydra.utils import get_original_cwd
@@ -85,8 +85,12 @@ def _resolve_model_dir(cfg: DictConfig) -> Path:
         if cand.is_dir():
             logger.info(f"Using fallback model directory: {cand}")
             return cand
-    logger.warning(f"No model directory found, checked MLflow and local hydra dirs. Please ensure a model is available.")
-    raise FileNotFoundError("No valid model directory found. Run training first or specify model_dir in config.")
+    logger.warning(
+        f"No model directory found, checked MLflow and local hydra dirs. Please ensure a model is available."
+    )
+    raise FileNotFoundError(
+        "No valid model directory found. Run training first or specify model_dir in config."
+    )
 
 
 def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
@@ -161,12 +165,15 @@ def integrated_gradients_tokens(
 
     for i, alpha in enumerate(torch.linspace(0.0, 1.0, steps)):
         # Interpolate between baseline and actual embeddings
-        x_embeds = (baseline_embeds + alpha * (inputs_embeds - baseline_embeds)).clone().requires_grad_(True)
+        x_embeds = (
+            (baseline_embeds + alpha * (inputs_embeds - baseline_embeds))
+            .clone()
+            .requires_grad_(True)
+        )
 
         # Forward pass through BERT
         outputs = model.bert_model(
-            inputs_embeds=x_embeds,
-            attention_mask=attention_mask
+            inputs_embeds=x_embeds, attention_mask=attention_mask
         )
         cls_embedding = outputs.last_hidden_state[:, 0, :]  # [CLS] token
 
@@ -189,7 +196,9 @@ def integrated_gradients_tokens(
     token_scores = ig.sum(dim=-1).squeeze(0)  # (seq_len,)
 
     if debug:
-        print(f"Debug: token_scores shape={token_scores.shape}, mean={token_scores.mean().item():.6f}")
+        print(
+            f"Debug: token_scores shape={token_scores.shape}, mean={token_scores.mean().item():.6f}"
+        )
 
     return token_scores
 
@@ -197,7 +206,7 @@ def integrated_gradients_tokens(
 def split_into_sentences(text: str) -> List[str]:
     """Split text into sentences using simple regex."""
     # Simple sentence splitting - could be improved with NLTK
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
     return [s.strip() for s in sentences if s.strip()]
 
 
@@ -246,7 +255,9 @@ def run_token_ig(cfg: DictConfig):
         predictions.append(pred_class)
 
         if (i + 1) % 100 == 0:
-            print(f"Processed predictions for {i + 1}/{len(texts)} documents", flush=True)
+            print(
+                f"Processed predictions for {i + 1}/{len(texts)} documents", flush=True
+            )
 
     n_docs = len(dataset)
     target_docs = range(n_docs if max_docs is None else min(max_docs, n_docs))
@@ -267,8 +278,11 @@ def run_token_ig(cfg: DictConfig):
 
         # Compute token-level IG
         token_scores = integrated_gradients_tokens(
-            model, inputs["input_ids"], inputs["attention_mask"],
-            pred_class, debug=(doc_idx < 3)
+            model,
+            inputs["input_ids"],
+            inputs["attention_mask"],
+            pred_class,
+            debug=(doc_idx < 3),
         )
 
         # Get token information
@@ -276,17 +290,21 @@ def run_token_ig(cfg: DictConfig):
         attention_mask = inputs["attention_mask"][0]
 
         # Filter out padding tokens and special tokens
-        valid_indices = attention_mask.bool() & \
-                       (inputs["input_ids"][0] != tokenizer.cls_token_id) & \
-                       (inputs["input_ids"][0] != tokenizer.sep_token_id) & \
-                       (inputs["input_ids"][0] != tokenizer.pad_token_id)
+        valid_indices = (
+            attention_mask.bool()
+            & (inputs["input_ids"][0] != tokenizer.cls_token_id)
+            & (inputs["input_ids"][0] != tokenizer.sep_token_id)
+            & (inputs["input_ids"][0] != tokenizer.pad_token_id)
+        )
 
         valid_tokens = [tokens[j] for j in range(len(tokens)) if valid_indices[j]]
         valid_scores = token_scores[valid_indices]
 
         # Get top tokens
         if len(valid_scores) > 0:
-            top_vals, top_inds = torch.topk(valid_scores, k=min(top_k, len(valid_scores)))
+            top_vals, top_inds = torch.topk(
+                valid_scores, k=min(top_k, len(valid_scores))
+            )
             top_tokens = [valid_tokens[idx] for idx in top_inds.tolist()]
 
             # Split text into sentences and find which sentences contain top tokens
@@ -303,20 +321,25 @@ def run_token_ig(cfg: DictConfig):
 
             # Get top sentences
             sentence_scores.sort(key=lambda x: x[1], reverse=True)
-            top_sentences = sentence_scores[:min(3, len(sentence_scores))]
+            top_sentences = sentence_scores[: min(3, len(sentence_scores))]
 
-            rows.append({
-                "doc_id": doc_idx,
-                "text": text[:200] + "..." if len(text) > 200 else text,
-                "pred_label": label_encoder.inverse_transform([pred_class])[0],
-                "top_tokens": top_tokens,
-                "token_scores": [float(v) for v in top_vals],
-                "top_sentences": [sent for _, _, sent in top_sentences],
-                "sentence_scores": [float(score) for _, score, _ in top_sentences],
-            })
+            rows.append(
+                {
+                    "doc_id": doc_idx,
+                    "text": text[:200] + "..." if len(text) > 200 else text,
+                    "pred_label": label_encoder.inverse_transform([pred_class])[0],
+                    "top_tokens": top_tokens,
+                    "token_scores": [float(v) for v in top_vals],
+                    "top_sentences": [sent for _, _, sent in top_sentences],
+                    "sentence_scores": [float(score) for _, score, _ in top_sentences],
+                }
+            )
 
         if (i + 1) % 50 == 0:
-            print(f"Processed token IG for {i + 1}/{len(target_docs)} documents", flush=True)
+            print(
+                f"Processed token IG for {i + 1}/{len(target_docs)} documents",
+                flush=True,
+            )
 
     import pandas as pd
 
@@ -334,7 +357,6 @@ def main(cfg: DictConfig):
     OmegaConf.set_struct(cfg, False)
 
     run_token_ig(cfg)
-
 
 
 @hydra.main(version_base=None, config_path="../conf", config_name="config")

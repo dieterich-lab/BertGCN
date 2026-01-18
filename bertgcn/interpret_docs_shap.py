@@ -86,8 +86,12 @@ def _resolve_model_dir(cfg: DictConfig) -> Path:
         if cand.is_dir():
             logger.info(f"Using fallback model directory: {cand}")
             return cand
-    logger.warning(f"No model directory found, checked MLflow and local hydra dirs. Please ensure a model is available.")
-    raise FileNotFoundError("No valid model directory found. Run training first or specify model_dir in config.")
+    logger.warning(
+        f"No model directory found, checked MLflow and local hydra dirs. Please ensure a model is available."
+    )
+    raise FileNotFoundError(
+        "No valid model directory found. Run training first or specify model_dir in config."
+    )
 
 
 def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
