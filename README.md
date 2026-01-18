@@ -16,6 +16,7 @@ A BERT-based Graph Convolutional Network for document classification, combining 
 - [Model Organization](#model-organization)
 - [MLflow Tracking](#mlflow-tracking)
 - [Interpretability](#interpretability)
+- [Results](#results)
 - [Testing](#testing)
 - [Contributing](#contributing)
 
