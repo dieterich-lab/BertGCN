@@ -271,6 +271,12 @@ def select_hierarchical_precedents(cfg: DictConfig):
             selected_neighbors = top_neighbor_ids[:top_docs]
             selected_scores = top_neighbor_scores[:top_docs]
 
+            if processed_count % 500 == 0:  # Debug every 500 docs
+                print(
+                    f"[{time.strftime('%H:%M:%S')}] DEBUG: selected_scores = {selected_scores}"
+                )
+                sys.stdout.flush()
+
         except Exception as e:
             print(
                 f"[{time.strftime('%H:%M:%S')}] Warning: Error processing row {idx}: {e}"
@@ -282,6 +288,13 @@ def select_hierarchical_precedents(cfg: DictConfig):
         doc_precedents = []
 
         for neigh_id, score in zip(selected_neighbors, selected_scores):
+            if (
+                processed_count % 500 == 0 and len(doc_precedents) == 0
+            ):  # Debug first precedent of every 500th doc
+                print(
+                    f"[{time.strftime('%H:%M:%S')}] DEBUG: Processing neighbor {neigh_id} with score {score}"
+                )
+                sys.stdout.flush()
             if neigh_id >= len(texts):
                 print(f"Warning: Neighbor ID {neigh_id} out of range, skipping")
                 continue
@@ -471,6 +484,13 @@ def select_hierarchical_precedents(cfg: DictConfig):
                 f"Warning: Error processing precedents for document {row.get('target_doc_id', 'unknown')}: {e}"
             )
             continue
+
+    # Debug: Check first few scores before CSV writing
+    if flat_rows:
+        print(
+            f"[{time.strftime('%H:%M:%S')}] DEBUG: First 3 neighbor_scores before CSV: {[r['neighbor_score'] for r in flat_rows[:3]]}"
+        )
+        sys.stdout.flush()
 
     pd.DataFrame(flat_rows).to_csv(out_file, index=False)
     end_time = time.time()
