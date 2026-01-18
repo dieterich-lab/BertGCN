@@ -8,6 +8,7 @@ run.sh
 data/
 slurm/
 .vscode
+drafts/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
