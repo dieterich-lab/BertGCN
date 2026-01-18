@@ -28,7 +28,7 @@ logger = get_logger(__name__)
 
 
 def _resolve_model_dir(cfg: DictConfig) -> Path:
-    """Pick model_dir in priority: cfg.interpretation.model_dir -> MLflow artifacts -> hydra/gcn/**/final_model -> models/final_model."""
+    """Pick model_dir in priority: cfg.interpretation.model_dir -> MLflow artifacts -> hydra/gcn/**/final_model."""
 
     try:
         project_root = Path(get_original_cwd())
@@ -82,12 +82,12 @@ def _resolve_model_dir(cfg: DictConfig) -> Path:
         candidates = []
 
     fallback = project_root / "models" / "final_model"
-    for cand in candidates + [fallback]:
+    for cand in candidates:
         if cand.is_dir():
             logger.info(f"Using fallback model directory: {cand}")
             return cand
-    logger.warning(f"Using final fallback: {fallback}")
-    return fallback
+    logger.warning(f"No model directory found, checked MLflow and local hydra dirs. Please ensure a model is available.")
+    raise FileNotFoundError("No valid model directory found. Run training first or specify model_dir in config.")
 
 
 def _load_model(cfg: DictConfig, n_classes: int, n_features: int) -> BertGCN:
