@@ -82,6 +82,7 @@ interpret-docs-ig = "bertgcn.interpret_docs_ig:main"
 interpret-docs-shap = "bertgcn.interpret_docs_shap:main"
 interpret-tokens-ig = "bertgcn.interpret_tokens_ig:main"
 select-precedents = "bertgcn.select_precedents:main"
+select-precedents-hierarchical = "bertgcn.select_precedents_hierarchical:main"
 # Legacy aliases for backward compatibility
 finetune-bert = "bertgcn.train_bert:main"
 train-bertgcn = "bertgcn.train_gcn:main"

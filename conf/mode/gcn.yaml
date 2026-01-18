@@ -32,14 +32,14 @@ data:
 # Model configuration for GCN
 model:
   n_features: 768
-  n_hidden: 200
+  n_hidden: 400
   dropout: 0.5
 
 # GCN-specific configuration
 gcn:
   mix_factor: 0.7
   gcn_layers: 2
-  n_hidden: 200
+  n_hidden: 400
   dropout: 0.5
 
 # Training configuration for GCN
