@@ -9,18 +9,20 @@ Usage:
     python analyze_hierarchical_precedents.py
 """
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from pathlib import Path
 import json
-from typing import Dict, List, Any
 import re
+from pathlib import Path
+from typing import Any, Dict, List
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import seaborn as sns
 
 # Set up plotting style
-plt.style.use('default')
+plt.style.use("default")
 sns.set_palette("husl")
+
 
 def load_hierarchical_precedents(output_dir: Path = None) -> pd.DataFrame:
     """Load the hierarchical precedents CSV file."""
@@ -36,184 +38,301 @@ def load_hierarchical_precedents(output_dir: Path = None) -> pd.DataFrame:
     print(f"Loaded {len(df)} target documents with precedents")
     return df
 
+
 def analyze_basic_statistics(df: pd.DataFrame) -> Dict[str, Any]:
     """Analyze basic statistics of the hierarchical precedents."""
     stats = {}
 
     # Overall statistics
-    stats['total_target_docs'] = len(df)
-    stats['total_precedents'] = df['precedents'].notna().sum()
+    stats["total_precedents"] = len(df)
+    stats["unique_target_docs"] = df["target_doc_id"].nunique()
+    stats["avg_precedents_per_doc"] = len(df) / df["target_doc_id"].nunique()
 
-    # Extract precedent details
-    precedent_details = []
-    for _, row in df.iterrows():
-        if pd.notna(row['precedents']):
-            try:
-                precedents = eval(row['precedents'])  # Safe since we generated it
-                for prec in precedents:
-                    precedent_details.append({
-                        'target_doc_id': row['target_doc_id'],
-                        'neighbor_score': prec.get('neighbor_score', 0),
-                        'sentence_count': len(prec.get('sentences', [])),
-                        'token_count': len(prec.get('influential_tokens', []))
-                    })
-            except:
-                continue
+    # Score statistics
+    stats["avg_neighbor_score"] = df["neighbor_score"].mean()
+    stats["median_neighbor_score"] = df["neighbor_score"].median()
+    stats["min_neighbor_score"] = df["neighbor_score"].min()
+    stats["max_neighbor_score"] = df["neighbor_score"].max()
 
-    if precedent_details:
-        prec_df = pd.DataFrame(precedent_details)
-        stats['avg_precedents_per_doc'] = len(prec_df) / len(df)
-        stats['avg_neighbor_score'] = prec_df['neighbor_score'].mean()
-        stats['median_neighbor_score'] = prec_df['neighbor_score'].median()
-        stats['avg_sentences_per_precedent'] = prec_df['sentence_count'].mean()
-        stats['avg_tokens_per_precedent'] = prec_df['token_count'].mean()
+    # Check for empty extractions
+    empty_sentences = (df["top_sentences"] == "[]").sum()
+    empty_tokens = (df["influential_tokens"] == "[]").sum()
 
-        # Score distribution
-        stats['score_distribution'] = {
-            'min': prec_df['neighbor_score'].min(),
-            'max': prec_df['neighbor_score'].max(),
-            'q25': prec_df['neighbor_score'].quantile(0.25),
-            'q75': prec_df['neighbor_score'].quantile(0.75)
-        }
+    stats["empty_sentences_count"] = empty_sentences
+    stats["empty_tokens_count"] = empty_tokens
+    stats["sentence_extraction_success_rate"] = (
+        (len(df) - empty_sentences) / len(df)
+    ) * 100
+    stats["token_extraction_success_rate"] = ((len(df) - empty_tokens) / len(df)) * 100
+
+    # Rank distribution
+    stats["rank_distribution"] = df["rank"].value_counts().sort_index().to_dict()
 
     return stats
 
-def analyze_clinical_relevance(df: pd.DataFrame, sample_size: int = 10) -> Dict[str, Any]:
+
+def analyze_clinical_relevance(
+    df: pd.DataFrame, sample_size: int = 10
+) -> Dict[str, Any]:
     """Analyze clinical relevance by sampling precedents."""
     clinical_terms = {
-        'medications': ['aspirin', 'warfarin', 'heparin', 'clopidogrel', 'statin', 'beta-blocker',
-                       'ace inhibitor', 'arb', 'diuretic', 'anticoagulant', 'antiplatelet'],
-        'conditions': ['hypertension', 'diabetes', 'stroke', 'myocardial infarction', 'heart failure',
-                      'atrial fibrillation', 'coronary artery disease', 'angina', 'embolism'],
-        'procedures': ['angioplasty', 'stent', 'bypass', 'catheterization', 'echocardiogram',
-                      'cardiac catheterization', 'pci', 'cabg'],
-        'measurements': ['blood pressure', 'cholesterol', 'ldl', 'hdl', 'triglycerides',
-                        'hba1c', 'creatinine', 'egfr', 'troponin', 'bnp']
+        "medications": [
+            "aspirin",
+            "warfarin",
+            "heparin",
+            "clopidogrel",
+            "statin",
+            "beta-blocker",
+            "ace inhibitor",
+            "arb",
+            "diuretic",
+            "anticoagulant",
+            "antiplatelet",
+        ],
+        "conditions": [
+            "hypertension",
+            "diabetes",
+            "stroke",
+            "myocardial infarction",
+            "heart failure",
+            "atrial fibrillation",
+            "coronary artery disease",
+            "angina",
+            "embolism",
+        ],
+        "procedures": [
+            "angioplasty",
+            "stent",
+            "bypass",
+            "catheterization",
+            "echocardiogram",
+            "cardiac catheterization",
+            "pci",
+            "cabg",
+        ],
+        "measurements": [
+            "blood pressure",
+            "cholesterol",
+            "ldl",
+            "hdl",
+            "triglycerides",
+            "hba1c",
+            "creatinine",
+            "egfr",
+            "troponin",
+            "bnp",
+        ],
     }
 
     relevance_scores = []
 
     # Sample some precedents for manual inspection
-    sample_docs = df.sample(min(sample_size, len(df)))
+    sample_df = df.sample(min(sample_size, len(df)))
 
-    for _, row in sample_docs.iterrows():
-        if pd.notna(row['precedents']):
-            try:
-                precedents = eval(row['precedents'])
-                for prec in precedents[:2]:  # Check first 2 precedents per doc
-                    sentences = prec.get('sentences', [])
-                    tokens = prec.get('influential_tokens', [])
+    for _, row in sample_df.iterrows():
+        try:
+            sentences = (
+                eval(row["top_sentences"]) if row["top_sentences"] != "[]" else []
+            )
+            tokens = (
+                eval(row["influential_tokens"])
+                if row["influential_tokens"] != "[]"
+                else []
+            )
 
-                    # Check if sentences contain clinical terms
-                    sentence_text = ' '.join(sentences).lower()
-                    token_text = ' '.join(tokens).lower() if tokens else ''
+            # Check if sentences contain clinical terms
+            sentence_text = " ".join(sentences).lower()
+            token_text = " ".join(tokens).lower() if tokens else ""
 
-                    clinical_matches = {
-                        category: sum(1 for term in terms
-                                    for sent in sentences
-                                    if term.lower() in sent.lower())
-                        for category, terms in clinical_terms.items()
-                    }
+            clinical_matches = {
+                category: sum(
+                    1
+                    for term in terms
+                    for sent in sentences
+                    if term.lower() in sent.lower()
+                )
+                for category, terms in clinical_terms.items()
+            }
 
-                    relevance_scores.append({
-                        'target_doc': row['target_doc_id'],
-                        'neighbor_score': prec.get('neighbor_score', 0),
-                        'sentences': sentences,
-                        'influential_tokens': tokens,
-                        'clinical_term_matches': clinical_matches,
-                        'total_clinical_terms': sum(clinical_matches.values()),
-                        'has_medications': clinical_matches['medications'] > 0,
-                        'has_conditions': clinical_matches['conditions'] > 0,
-                        'has_procedures': clinical_matches['procedures'] > 0,
-                        'has_measurements': clinical_matches['measurements'] > 0
-                    })
-            except Exception as e:
-                print(f"Error processing precedents for doc {row['target_doc_id']}: {e}")
-                continue
+            relevance_scores.append(
+                {
+                    "target_doc_id": row["target_doc_id"],
+                    "neighbor_doc_id": row["neighbor_doc_id"],
+                    "rank": row["rank"],
+                    "neighbor_score": row["neighbor_score"],
+                    "sentences": sentences,
+                    "influential_tokens": tokens,
+                    "clinical_term_matches": clinical_matches,
+                    "total_clinical_terms": sum(clinical_matches.values()),
+                    "has_medications": clinical_matches["medications"] > 0,
+                    "has_conditions": clinical_matches["conditions"] > 0,
+                    "has_procedures": clinical_matches["procedures"] > 0,
+                    "has_measurements": clinical_matches["measurements"] > 0,
+                }
+            )
+        except Exception as e:
+            print(f"Error processing row {row.name}: {e}")
+            continue
 
     return {
-        'sample_size': len(relevance_scores),
-        'relevance_scores': relevance_scores,
-        'avg_clinical_terms_per_precedent': np.mean([r['total_clinical_terms'] for r in relevance_scores]) if relevance_scores else 0,
-        'precedents_with_medications': sum(1 for r in relevance_scores if r['has_medications']) / len(relevance_scores) if relevance_scores else 0,
-        'precedents_with_conditions': sum(1 for r in relevance_scores if r['has_conditions']) / len(relevance_scores) if relevance_scores else 0,
-        'precedents_with_procedures': sum(1 for r in relevance_scores if r['has_procedures']) / len(relevance_scores) if relevance_scores else 0,
-        'precedents_with_measurements': sum(1 for r in relevance_scores if r['has_measurements']) / len(relevance_scores) if relevance_scores else 0
+        "sample_size": len(relevance_scores),
+        "relevance_scores": relevance_scores,
+        "avg_clinical_terms_per_precedent": (
+            np.mean([r["total_clinical_terms"] for r in relevance_scores])
+            if relevance_scores
+            else 0
+        ),
+        "precedents_with_medications": (
+            sum(1 for r in relevance_scores if r["has_medications"])
+            / len(relevance_scores)
+            if relevance_scores
+            else 0
+        ),
+        "precedents_with_conditions": (
+            sum(1 for r in relevance_scores if r["has_conditions"])
+            / len(relevance_scores)
+            if relevance_scores
+            else 0
+        ),
+        "precedents_with_procedures": (
+            sum(1 for r in relevance_scores if r["has_procedures"])
+            / len(relevance_scores)
+            if relevance_scores
+            else 0
+        ),
+        "precedents_with_measurements": (
+            sum(1 for r in relevance_scores if r["has_measurements"])
+            / len(relevance_scores)
+            if relevance_scores
+            else 0
+        ),
     }
+
 
 def create_visualizations(stats: Dict, relevance_analysis: Dict, output_dir: Path):
     """Create visualizations for the analysis."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Score distribution plot
-    if 'score_distribution' in stats:
+    if "score_distribution" in stats:
         plt.figure(figsize=(10, 6))
-        scores = relevance_analysis.get('relevance_scores', [])
+        scores = relevance_analysis.get("relevance_scores", [])
         if scores:
-            score_values = [r['neighbor_score'] for r in scores]
-            plt.hist(score_values, bins=20, alpha=0.7, edgecolor='black')
-            plt.xlabel('Neighbor Influence Score')
-            plt.ylabel('Frequency')
-            plt.title('Distribution of Hierarchical Precedent Influence Scores')
+            score_values = [r["neighbor_score"] for r in scores]
+            plt.hist(score_values, bins=20, alpha=0.7, edgecolor="black")
+            plt.xlabel("Neighbor Influence Score")
+            plt.ylabel("Frequency")
+            plt.title("Distribution of Hierarchical Precedent Influence Scores")
             plt.grid(True, alpha=0.3)
-            plt.savefig(output_dir / 'score_distribution.png', dpi=300, bbox_inches='tight')
+            plt.savefig(
+                output_dir / "score_distribution.png", dpi=300, bbox_inches="tight"
+            )
             plt.close()
 
     # Clinical relevance bar chart
     clinical_metrics = {
-        'Medications': relevance_analysis.get('precedents_with_medications', 0),
-        'Conditions': relevance_analysis.get('precedents_with_conditions', 0),
-        'Procedures': relevance_analysis.get('precedents_with_procedures', 0),
-        'Measurements': relevance_analysis.get('precedents_with_measurements', 0)
+        "Medications": relevance_analysis.get("precedents_with_medications", 0),
+        "Conditions": relevance_analysis.get("precedents_with_conditions", 0),
+        "Procedures": relevance_analysis.get("precedents_with_procedures", 0),
+        "Measurements": relevance_analysis.get("precedents_with_measurements", 0),
     }
 
     plt.figure(figsize=(10, 6))
-    bars = plt.bar(clinical_metrics.keys(), [v * 100 for v in clinical_metrics.values()],
-                   color=['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4'], alpha=0.8)
-    plt.ylabel('Percentage of Precedents (%)')
-    plt.title('Clinical Relevance: Medical Concepts in Hierarchical Precedents')
+    bars = plt.bar(
+        clinical_metrics.keys(),
+        [v * 100 for v in clinical_metrics.values()],
+        color=["#FF6B6B", "#4ECDC4", "#45B7D1", "#96CEB4"],
+        alpha=0.8,
+    )
+    plt.ylabel("Percentage of Precedents (%)")
+    plt.title("Clinical Relevance: Medical Concepts in Hierarchical Precedents")
     plt.ylim(0, 100)
 
     for bar, value in zip(bars, clinical_metrics.values()):
-        plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
-                f'{value*100:.1f}%', ha='center', va='bottom', fontweight='bold')
+        plt.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 1,
+            f"{value*100:.1f}%",
+            ha="center",
+            va="bottom",
+            fontweight="bold",
+        )
 
-    plt.grid(True, alpha=0.3, axis='y')
-    plt.savefig(output_dir / 'clinical_relevance.png', dpi=300, bbox_inches='tight')
+    plt.grid(True, alpha=0.3, axis="y")
+    plt.savefig(output_dir / "clinical_relevance.png", dpi=300, bbox_inches="tight")
     plt.close()
+
 
 def generate_report(stats: Dict, relevance_analysis: Dict, output_dir: Path):
     """Generate a comprehensive analysis report."""
-    report_path = output_dir / 'hierarchical_precedents_report.md'
+    report_path = output_dir / "hierarchical_precedents_report.md"
 
-    with open(report_path, 'w') as f:
+    with open(report_path, "w") as f:
         f.write("# Hierarchical Precedents Analysis Report\n\n")
-        f.write(f"**Generated:** {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        f.write(
+            f"**Generated:** {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        )
 
         f.write("## Overview\n\n")
-        f.write(f"- **Total target documents:** {stats.get('total_target_docs', 0)}\n")
-        f.write(f"- **Documents with precedents:** {stats.get('total_precedents', 0)}\n")
-        f.write(".1f"        f.write(".1f"        f.write(".1f"        f.write(".1f"
-        if 'score_distribution' in stats:
-            f.write("\n### Score Distribution\n")
-            dist = stats['score_distribution']
-            f.write(".6f"            f.write(".6f"            f.write(".6f"            f.write(".6f"
+        f.write(f"- **Total precedents:** {stats.get('total_precedents', 0)}\n")
+        f.write(
+            f"- **Unique target documents:** {stats.get('unique_target_docs', 0)}\n"
+        )
+        f.write(
+            f"- **Average precedents per document:** {stats.get('avg_precedents_per_doc', 0):.1f}\n"
+        )
+        f.write(
+            f"- **Average neighbor score:** {stats.get('avg_neighbor_score', 0):.6f}\n"
+        )
+        f.write(
+            f"- **Sentence extraction success rate:** {stats.get('sentence_extraction_success_rate', 0):.1f}%\n"
+        )
+        f.write(
+            f"- **Token extraction success rate:** {stats.get('token_extraction_success_rate', 0):.1f}%\n"
+        )
+
+        if "rank_distribution" in stats:
+            f.write("\n### Rank Distribution\n")
+            for rank, count in stats["rank_distribution"].items():
+                f.write(f"- **Rank {rank}:** {count} precedents\n")
         f.write("\n## Clinical Relevance Analysis\n\n")
-        f.write(f"- **Sample size:** {relevance_analysis.get('sample_size', 0)} precedents\n")
-        f.write(".2f"        f.write(".1f"        f.write(".1f"        f.write(".1f"        f.write(".1f"
+        f.write(
+            f"- **Sample size:** {relevance_analysis.get('sample_size', 0)} precedents\n"
+        )
+        f.write(
+            f"- **Average clinical terms per precedent:** {relevance_analysis.get('avg_clinical_terms_per_precedent', 0):.2f}\n"
+        )
+        f.write(
+            f"- **Precedents with medications:** {relevance_analysis.get('precedents_with_medications', 0):.1f}%\n"
+        )
+        f.write(
+            f"- **Precedents with conditions:** {relevance_analysis.get('precedents_with_conditions', 0):.1f}%\n"
+        )
+        f.write(
+            f"- **Precedents with procedures:** {relevance_analysis.get('precedents_with_procedures', 0):.1f}%\n"
+        )
+        f.write(
+            f"- **Precedents with measurements:** {relevance_analysis.get('precedents_with_measurements', 0):.1f}%\n"
+        )
         f.write("\n## Sample Precedents\n\n")
-        sample_precedents = relevance_analysis.get('relevance_scores', [])[:5]
+        sample_precedents = relevance_analysis.get("relevance_scores", [])[:5]
         for i, prec in enumerate(sample_precedents, 1):
             f.write(f"### Sample {i}\n")
-            f.write(f"- **Target Document ID:** {prec['target_doc']}\n")
-            f.write(".6f"            f.write(f"- **Influential Tokens:** {', '.join(prec['influential_tokens'][:10])}{'...' if len(prec['influential_tokens']) > 10 else ''}\n")
+            f.write(f"- **Target Document ID:** {prec['target_doc_id']}\n")
+            f.write(f"- **Neighbor Document ID:** {prec['neighbor_doc_id']}\n")
+            f.write(f"- **Rank:** {prec['rank']}\n")
+            f.write(f"- **Neighbor Score:** {prec['neighbor_score']:.6f}\n")
+            f.write(
+                f"- **Influential Tokens:** {', '.join(prec['influential_tokens'][:10])}{'...' if len(prec['influential_tokens']) > 10 else ''}\n"
+            )
             f.write(f"- **Clinical Terms Found:** {prec['total_clinical_terms']}\n")
             f.write("- **Sample Sentences:**\n")
-            for j, sent in enumerate(prec['sentences'][:3], 1):
+            for j, sent in enumerate(prec["sentences"][:3], 1):
                 f.write(f"  {j}. {sent[:200]}{'...' if len(sent) > 200 else ''}\n")
             f.write("\n")
 
     print(f"Report generated: {report_path}")
+
 
 def main():
     """Main analysis function."""
@@ -228,12 +347,23 @@ def main():
         print("\n📊 Computing basic statistics...")
         stats = analyze_basic_statistics(df)
         print(f"✓ Found {stats.get('total_target_docs', 0)} target documents")
-        print(".1f"        print(".6f"
+        print(
+            f"✓ Average precedents per document: {stats.get('avg_precedents_per_doc', 0):.1f}"
+        )
+        print(f"✓ Average neighbor score: {stats.get('avg_neighbor_score', 0):.6f}")
+
         # Clinical relevance analysis
         print("\n🏥 Analyzing clinical relevance...")
         relevance_analysis = analyze_clinical_relevance(df, sample_size=20)
-        print(f"✓ Analyzed {relevance_analysis.get('sample_size', 0)} sample precedents")
-        print(".2f"        print(".1f"
+        print(
+            f"✓ Analyzed {relevance_analysis.get('sample_size', 0)} sample precedents"
+        )
+        print(
+            f"✓ Average clinical terms per precedent: {relevance_analysis.get('avg_clinical_terms_per_precedent', 0):.2f}"
+        )
+        print(
+            f"✓ Precedents with medications: {relevance_analysis.get('precedents_with_medications', 0):.1f}%"
+        )
         # Create output directory
         output_dir = Path.cwd() / "outputs" / "gcn" / "interpret" / "analysis"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -249,12 +379,16 @@ def main():
         print("\n✅ Analysis complete!")
         print(f"📁 Results saved to: {output_dir}")
         print(f"📄 Report: {output_dir}/hierarchical_precedents_report.md")
-        print(f"📊 Charts: {output_dir}/score_distribution.png, {output_dir}/clinical_relevance.png")
+        print(
+            f"📊 Charts: {output_dir}/score_distribution.png, {output_dir}/clinical_relevance.png"
+        )
 
     except Exception as e:
         print(f"❌ Error during analysis: {e}")
         import traceback
+
         traceback.print_exc()
+
 
 if __name__ == "__main__":
     main()
