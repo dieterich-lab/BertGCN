@@ -82,13 +82,14 @@ def integrated_gradients_tokens(
     for i, alpha in enumerate(torch.linspace(0.0, 1.0, steps)):
         # Interpolate between baseline and actual embeddings at token level
         interpolated_embeddings = (
-            baseline_embeddings + alpha * (actual_embeddings - baseline_embeddings)
-        ).clone().requires_grad_(True)
+            (baseline_embeddings + alpha * (actual_embeddings - baseline_embeddings))
+            .clone()
+            .requires_grad_(True)
+        )
 
         # Forward pass: run interpolated embeddings through FULL BERT + classifier
         bert_outputs = model.bert_model(
-            inputs_embeds=interpolated_embeddings,
-            attention_mask=attention_mask
+            inputs_embeds=interpolated_embeddings, attention_mask=attention_mask
         )
 
         # Get [CLS] token and run through classifier
