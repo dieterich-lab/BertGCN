@@ -1,4 +1,4 @@
-# Corpus-Level Interpretability for Document Classification using BERT-GCN
+# Corpus-Level Interpretability for Precedent Detection in Medical Document Classification using BERT-GCN
 
 **Major Extension:** BertGCN now includes advanced document-level interpretability capabilities, enabling the identification of influential documents (precedents) that contribute to a model's predictions. This opens up a wide range of use cases in explainable AI, legal analysis, medical diagnostics, and any domain requiring transparent document classification with precedent-based reasoning.
 
