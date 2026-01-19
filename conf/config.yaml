@@ -61,7 +61,9 @@ interpretation:
   top_k: 5
   model_dir: null  # Will auto-resolve from MLflow if not set
 
-# Hydra configuration - paths controlled by scripts, not config
+# Hydra configuration - all outputs default to mlruns/
 hydra:
   run:
-    dir: hydra/${mode}/${now:%Y-%m-%d_%H-%M-%S}
+    dir: mlruns/runs/${now:%Y-%m-%d_%H-%M-%S}
+  sweep:
+    dir: mlruns/sweeps/${now:%Y-%m-%d_%H-%M-%S}
