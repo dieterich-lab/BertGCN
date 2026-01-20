@@ -65,3 +65,6 @@ interpretation:
 hydra:
   run:
     dir: mlruns/runs/${now:%Y-%m-%d_%H-%M-%S}
+  sweep:
+    dir: /dev/null
+    subdir: null
