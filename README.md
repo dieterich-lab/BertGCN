@@ -187,7 +187,64 @@ poetry run train-bertgcn --multirun \
 - Results logged to MLflow for comparison
 - Hydra configs saved in `hydra/gcn/sweeps/<timestamp>/`, models in MLflow artifacts
 
+### SLURM-Based Distributed Sweeps
 
+For large-scale hyperparameter sweeps on GPU clusters, use the provided SLURM scripts:
+
+```bash
+# Phase 1: Initial exploration (24 configs, ~7.6 hours)
+sbatch slurm/train_gcn_sweep.sh
+
+# Phase 2: Extended sweep with larger models (144 configs, ~45.6 hours)
+sbatch slurm/train_gcn_sweep_p2.sh
+```
+
+- **Phase 1**: Explores core hyperparameters (mix factor, hidden dims, dropout)
+- **Phase 2**: Builds on Phase 1 results with larger architectures and A100 GPU
+- Jobs run in parallel on SLURM cluster with A100 GPUs (80GB VRAM)
+- All results automatically logged to MLflow for analysis
+
+### Recent Sweep Results
+
+#### Phase 1: Initial Exploration (24 configs)
+Analysis of a 24-configuration hyperparameter sweep exploring mix factor (0.4, 0.5, 0.65, 0.8), hidden dimensions (250, 300), and dropout rates (0.2, 0.3, 0.4):
+
+| Rank | Mix Factor | Hidden Dim | Dropout | Test Acc | Notes |
+|------|------------|------------|---------|----------|-------|
+| 1-2 | 0.8 | 300 | 0.2, 0.3 | 97.4% | **Best performers** |
+| 3 | 0.8 | 300 | 0.4 | 97.0% | |
+| 4-5 | 0.65 | 300 | 0.3, 0.4 | 96.9% | |
+| 6 | 0.8 | 250 | 0.3 | 96.7% | |
+| 7-9 | 0.4, 0.65 | 250 | 0.2, 0.4 | 96.5% | |
+| 10-16 | Various | 250 | Various | 96.3% | |
+| 17-23 | Various | 300 | Various | 95.6-96.3% | Lower hidden dim configs |
+| 24 | 0.65 | 300 | 0.2 | 95.0% | **Worst performer** |
+
+**Key Findings:**
+- **Hidden dimension 300** achieved best peak performance (97.4% vs 96.7% for 250)
+- **Mix factor 0.8** showed most consistent high performance across dropout rates
+- **Dropout 0.3** was optimal in most configurations
+- **Early stopping** prevented overfitting (13 epochs trained vs 70 max configured)
+- **Test accuracy range:** 95.0% - 97.4% (2.4% spread)
+
+#### Phase 2: Targeted Extension (144 configs, In Progress)
+Building on Phase 1 results, exploring larger architectures with A100 GPU (80GB VRAM):
+
+**Parameter Ranges:**
+- **GCN Layers:** 2-3 (vs 2 fixed in Phase 1)
+- **Hidden Dimensions:** 400-600 (vs 250-300 in Phase 1)
+- **Mix Factor:** 0.85-0.95 (vs 0.4-0.8 in Phase 1)
+- **Dropout:** 0.2-0.3 (optimal range from Phase 1)
+- **BERT Learning Rate:** 2e-5, 5e-5 (fine-tuning)
+- **Batch Size:** 96, 128 (memory-optimized)
+
+**Expected Improvements:**
+- Larger hidden dimensions may improve representation capacity
+- Deeper GCN networks (3 layers) could capture more complex document relationships
+- Higher mix factors may better balance BERT and GCN features
+- Total runtime: ~45.6 hours (1.9 days) across SLURM jobs
+
+All results logged to MLflow for detailed comparison and model artifact retrieval.
 
 ---
 
