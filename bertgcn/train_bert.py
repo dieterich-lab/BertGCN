@@ -430,6 +430,9 @@ def setup_trainer(
         "metric_for_best_model": "f1",
         "fp16": cfg.hparams.fp16,
         "disable_tqdm": True,
+        "lr_scheduler_type": getattr(cfg.hparams, "lr_scheduler_type", "linear"),
+        "warmup_ratio": getattr(cfg.hparams, "warmup_ratio", 0.1),
+        "max_grad_norm": getattr(cfg.hparams, "max_grad_norm", 1.0),
     }
 
     # Always enforce 'epoch' for both strategies if best model or early stopping is used
