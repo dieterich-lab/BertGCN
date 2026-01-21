@@ -561,7 +561,7 @@ def main(cfg: DictConfig):
         project_root = Path.cwd()
 
     # Use Hydra's run directory instead of manual creation
-    from hydra.core.hydra_configuration import HydraConfig
+    from hydra.core.hydra_config import HydraConfig
 
     out_dir = Path(HydraConfig.get().runtime.output_dir)
 
