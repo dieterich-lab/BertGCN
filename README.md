@@ -15,14 +15,14 @@ A BERT-based Graph Convolutional Network for document classification, combining 
 - [Running Experiments and Sweeps](#running-experiments-and-sweeps)
 - [Model Organization](#model-organization)
 - [MLflow Tracking](#mlflow-tracking)
-- [Interpretability](#interpretability)
+- [Interpretability](#document-level-interpretability-for-precedents-detection)
 - [Results](#results)
 - [Testing](#testing)
 - [Contributing](#contributing)
 
 ---
 
-## 🚀 Installation
+## Installation
 
 **Requirements:**
 
@@ -41,7 +41,7 @@ This installs all dependencies via Poetry and sets up the environment.
 
 ---
 
-## ⚡ Quick Start
+## Quick Start
 
 Run the full pipeline with default settings:
 
@@ -69,7 +69,7 @@ Models are saved in `outputs/`, Hydra configs in `hydra/`, and experiments track
 
 ---
 
-## 🔄 Workflow Overview
+## Workflow Overview
 
 BertGCN follows a sequential pipeline:
 
@@ -107,7 +107,7 @@ BertGCN follows a sequential pipeline:
 
 ---
 
-## ⚙️ Configuration Management
+## Configuration Management
 
 BertGCN uses Hydra for flexible configuration. All configs are in `conf/`:
 
@@ -161,7 +161,7 @@ poetry run train-bertgcn --config-path experiments/my_experiment
 
 ---
 
-## 🔍 Running Experiments and Sweeps
+## Running Experiments and Sweeps
 
 ### Single Runs
 
@@ -227,7 +227,7 @@ Analysis of a 24-configuration hyperparameter sweep exploring mix factor (0.4, 0
 - **Early stopping** prevented overfitting (13 epochs trained vs 70 max configured)
 - **Test accuracy range:** 95.0% - 97.4% (2.4% spread)
 
-#### Phase 2: Targeted Extension (144 configs, In Progress)
+#### Phase 2: Targeted Extension (144 configs, Completed)
 Building on Phase 1 results, exploring larger architectures with A100 GPU (80GB VRAM):
 
 **Parameter Ranges:**
@@ -238,17 +238,30 @@ Building on Phase 1 results, exploring larger architectures with A100 GPU (80GB 
 - **BERT Learning Rate:** 2e-5, 5e-5 (fine-tuning)
 - **Batch Size:** 96, 128 (memory-optimized)
 
-**Expected Improvements:**
-- Larger hidden dimensions may improve representation capacity
-- Deeper GCN networks (3 layers) could capture more complex document relationships
-- Higher mix factors may better balance BERT and GCN features
-- Total runtime: ~45.6 hours (1.9 days) across SLURM jobs
+**Top Performers (97.0%+ Test Accuracy):**
+
+| Rank | Mix Factor | GCN Layers | Hidden Dim | Dropout | BERT LR | Batch Size | Test Acc | Notes |
+|------|------------|------------|------------|---------|---------|------------|----------|-------|
+| 1-2 | 0.85 | 2, 3 | 600 | 0.3 | 5e-5 | 96 | 97.6% | **Best performers** - Larger models with higher BERT LR |
+| 3-4 | 0.85 | 2, 3 | 600 | 0.2 | 5e-5 | 96 | 97.4% | Strong performance with lower dropout |
+| 5-8 | 0.85, 0.9 | 2, 3 | 400-600 | 0.2-0.3 | 2e-5 | 96, 128 | 97.2% | Consistent high performance across configs |
+| 9-10 | 0.85, 0.95 | 2 | 600 | 0.3 | 2e-5, 5e-5 | 128 | 97.0% | |
+
+**Key Findings:**
+- **Hidden dimension 600** achieved best peak performance (97.6% vs lower for smaller dims)
+- **Mix factor 0.85** showed most consistent high performance, slightly better than 0.9-0.95
+- **GCN layers 3** achieved comparable performance to 2 layers with larger hidden dims
+- **BERT LR 5e-5** outperformed 2e-5 in top configurations
+- **Batch size 96** generally better than 128 for convergence
+- **Dropout 0.3** remained optimal in most configurations
+- **Test accuracy range:** 94.3% - 97.6% (3.3% spread, improved from Phase 1)
+- **Runtime:** ~48 hours total (144 jobs × ~20 min avg, sequential on single GPU)
 
 All results logged to MLflow for detailed comparison and model artifact retrieval.
 
 ---
 
-## 📂 Model Organization
+## Model Organization
 
 Models are saved in `outputs/` directories, Hydra configs in `hydra/`, and experiments tracked in `mlruns/`:
 
@@ -294,7 +307,7 @@ Each sweep job creates its own `<timestamp>/` directory under `hydra/gcn/sweeps/
 
 ---
 
-## 📈 MLflow Tracking
+## MLflow Tracking
 
 All experiments are tracked in a single canonical MLflow store at `mlruns/` in the project root:
 
@@ -332,7 +345,7 @@ Compare runs across BERT and GCN experiments, download models, and analyze perfo
 
 ---
 
-## 🧭 Document-Level Interpretability for Precedents Detection
+## Document-Level Interpretability for Precedents Detection
 
 BertGCN provides multiple approaches to explain predictions by identifying influential documents (precedents):
 
@@ -387,7 +400,7 @@ Run `notebooks/analyze_interpretation_statistics.ipynb` to:
 
 ---
 
-## 📊 Results
+## Results
 
 Recent evaluation of the corpus-level interpretability framework on a clinical document classification dataset demonstrates strong performance and clinical utility:
 
@@ -400,7 +413,7 @@ These results validate the framework's effectiveness in providing transparent, p
 
 ---
 
-## 🧪 Testing
+## Testing
 
 Run the test suite:
 
@@ -412,7 +425,7 @@ Tests cover config behavior, graph building, and training stability.
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repository
 2. Create feature branch
