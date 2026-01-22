@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Minimal BERT fine-tuning script with MLflow logging and performance tweaks.
 
 MLflow storage:
@@ -14,18 +15,6 @@ Edit CONFIG SECTION to adjust hyperparameters.
 """
 
 from __future__ import annotations
-
-import inspect
-import os
-import subprocess
-import sys
-import tempfile
-import warnings
-from collections import Counter
-from datetime import datetime
-from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Dict, Tuple
 
 import joblib
 import mlflow
@@ -576,7 +565,7 @@ def main(cfg: DictConfig):
     # a hyperparameter). This ensures a single tracking store for all jobs.
     job = locals().get("job", getattr(cfg, "mode", None) or "bert")
     env_uri = os.environ.get("MLFLOW_TRACKING_URI")
-    canonical_dir = project_root / "mlruns"
+    canonical_dir = project_root / "mlruns"  # Use same directory as GCN training
     canonical_uri = f"file:{canonical_dir}"
     if env_uri:
         mlflow.set_tracking_uri(env_uri)
