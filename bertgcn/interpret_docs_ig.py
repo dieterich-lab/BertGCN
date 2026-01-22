@@ -13,6 +13,11 @@ Config:
     interpretation.top_k (default 5), interpretation.max_docs (optional)
 """
 
+import sys
+
+# Enable line buffering for stdout to ensure real-time log output
+sys.stdout.reconfigure(line_buffering=True)
+
 from pathlib import Path
 from typing import Dict, List, Tuple
 

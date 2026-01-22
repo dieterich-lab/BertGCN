@@ -28,6 +28,10 @@ warnings.simplefilter("ignore")
 import json
 import logging
 import sys
+
+# Enable line buffering for stdout to ensure real-time log output
+sys.stdout.reconfigure(line_buffering=True)
+
 import tempfile
 
 logging.getLogger().setLevel(logging.ERROR)

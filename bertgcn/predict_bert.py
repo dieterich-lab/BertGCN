@@ -1,6 +1,10 @@
 """Prediction script for BERT model."""
 
 import sys
+
+# Enable line buffering for stdout to ensure real-time log output
+sys.stdout.reconfigure(line_buffering=True)
+
 from pathlib import Path
 from typing import Tuple
 

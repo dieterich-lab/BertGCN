@@ -1,6 +1,10 @@
 """Prediction script for BertGCN GCN model on test set."""
 
 import sys
+
+# Enable line buffering for stdout to ensure real-time log output
+sys.stdout.reconfigure(line_buffering=True)
+
 from pathlib import Path
 
 import mlflow
