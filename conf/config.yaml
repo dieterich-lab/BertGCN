@@ -60,8 +60,3 @@ inference:
 interpretation:
   top_k: 5
   model_dir: null  # Will auto-resolve from MLflow if not set
-
-# Hydra configuration - all outputs default to mlruns/
-hydra:
-  run:
-    dir: mlruns/runs/${now:%Y-%m-%d_%H-%M-%S}

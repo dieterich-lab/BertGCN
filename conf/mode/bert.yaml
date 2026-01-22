@@ -6,10 +6,10 @@ mode: bert
 # Override experiment name for finetuning
 mlflow_experiment_name: "bertgcn_finetuning"
 
-# Set Hydra run directory outside mlruns to avoid MLflow conflicts
+# Override Hydra run directory to avoid MLflow conflicts
 hydra:
   run:
-    dir: /beegfs/homes/pwiesenbach/BertGCN/hydra/bert/${now:%Y-%m-%d_%H-%M-%S}
+    dir: /beegfs/homes/pwiesenbach/BertGCN/outputs/bert/${now:%Y-%m-%d_%H-%M-%S}
 
 # BERT hyperparameters (needed for finetuning)
 hparams:

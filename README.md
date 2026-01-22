@@ -207,13 +207,13 @@ sbatch slurm/train_gcn_sweep_p2.sh
 ### BERT Baseline Performance
 Plain BERT fine-tuning (no GCN) establishes the baseline for comparison with BertGCN models:
 
-- **Test Accuracy**: 89.5%
-- **Validation Accuracy**: 92.6% (best epoch)
-- **Training**: 50 epochs with early stopping (patience=3), LR=2e-5, batch_size=32
+- **Test Accuracy**: 91.3%
+- **Validation Accuracy**: 93.7% (best epoch)
+- **Training**: 100 epochs with early stopping (patience=7), LR=5e-5, batch_size=96
 - **Model**: MedBERT (German medical language model) with classification head
 - **Dataset**: Same clinical indication classification task
 
-This baseline shows that BertGCN models significantly outperform plain BERT, with improvements of 7-8% in test accuracy.
+This baseline shows that BertGCN models significantly outperform plain BERT, with improvements of 4-6% in test accuracy.
 
 ### Recent Sweep Results
 
